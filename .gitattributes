@@ -1,0 +1,5 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+# shell scripts run in Linux containers and on macOS, keep them LF on checkout
+*.sh text eol=lf
+gradlew text eol=lf

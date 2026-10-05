@@ -1,0 +1,141 @@
+package com.catherinepereira.mcdrone.net;
+
+import com.catherinepereira.mcdrone.McDrone;
+import com.catherinepereira.mcdrone.entity.DroneEntity;
+import com.catherinepereira.mcdrone.task.Arena;
+import com.catherinepereira.mcdrone.task.BuildJob;
+import com.catherinepereira.mcdrone.task.Region;
+import com.catherinepereira.mcdrone.task.RegionStore;
+import com.catherinepereira.mcdrone.task.Schematic;
+import com.catherinepereira.mcdrone.tool.DroneTools;
+import java.io.IOException;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
+import net.minecraft.core.BlockPos;
+import net.minecraft.network.chat.Component;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.Entity;
+
+public final class ModNetworking {
+	private ModNetworking() {
+	}
+
+	// drone poses and tools skip survival permission checks, arena resets rewrite blocks and teleport, freezing
+	// stops the whole world, and exports and region edits write files, so a LAN guest gets none of them
+	private static boolean isHost(MinecraftServer server, ServerPlayer player) {
+		return !server.isDedicatedServer() && server.isSingleplayerOwner(player.nameAndId());
+	}
+
+	public static void register() {
+		PayloadTypeRegistry.serverboundPlay().register(DronePosePayload.TYPE, DronePosePayload.CODEC);
+		PayloadTypeRegistry.serverboundPlay().register(ResetTaskPayload.TYPE, ResetTaskPayload.CODEC);
+		PayloadTypeRegistry.serverboundPlay().register(SetFrozenPayload.TYPE, SetFrozenPayload.CODEC);
+		PayloadTypeRegistry.serverboundPlay().register(DroneToolPayload.TYPE, DroneToolPayload.CODEC);
+		PayloadTypeRegistry.serverboundPlay().register(ExportSchematicPayload.TYPE, ExportSchematicPayload.CODEC);
+		PayloadTypeRegistry.serverboundPlay().register(RegionEditPayload.TYPE, RegionEditPayload.CODEC);
+		PayloadTypeRegistry.clientboundPlay().register(RegionsPayload.TYPE, RegionsPayload.CODEC);
+
+		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) ->
+			sender.sendPacket(new RegionsPayload(RegionStore.get(server).toJson().toString()))
+		);
+
+		ServerPlayNetworking.registerGlobalReceiver(RegionEditPayload.TYPE, (payload, context) -> {
+			ServerPlayer player = context.player();
+			if (!isHost(context.server(), player)) {
+				return;
+			}
+			RegionStore store = RegionStore.get(context.server());
+			String result;
+			try {
+				JsonObject edit = JsonParser.parseString(payload.json()).getAsJsonObject();
+				if (edit.get("op").getAsString().equals("remove")) {
+					result = store.remove(edit.get("id").getAsString()) ? "Region removed" : "No such region";
+				} else {
+					JsonArray box = edit.getAsJsonArray("box");
+					Region region = store.put(
+						edit.get("name").getAsString(), Region.Purpose.parse(edit.get("purpose").getAsString()),
+						new BlockPos(box.get(0).getAsInt(), box.get(1).getAsInt(), box.get(2).getAsInt()), new BlockPos(box.get(3).getAsInt(), box.get(4).getAsInt(), box.get(5).getAsInt())
+					);
+					result = "Saved " + region.purpose().id() + " region " + region.name();
+				}
+			} catch (RuntimeException e) {
+				result = "Region not saved: " + e.getMessage();
+			}
+			player.sendOverlayMessage(Component.literal(result));
+			String json = store.toJson().toString();
+			for (ServerPlayer p : context.server().getPlayerList().getPlayers()) {
+				ServerPlayNetworking.send(p, new RegionsPayload(json));
+			}
+		});
+		PayloadTypeRegistry.clientboundPlay().register(DroneSyncPayload.TYPE, DroneSyncPayload.CODEC);
+		PayloadTypeRegistry.clientboundPlay().register(TaskReadyPayload.TYPE, TaskReadyPayload.CODEC);
+
+		ServerPlayNetworking.registerGlobalReceiver(DronePosePayload.TYPE, (payload, context) -> {
+			ServerPlayer player = context.player();
+			Entity entity = player.level().getEntity(payload.entityId());
+			if (isHost(context.server(), player) && entity instanceof DroneEntity drone && drone.isOwnedBy(player)) {
+				drone.snapTo(payload.x(), payload.y(), payload.z(), payload.yaw(), payload.pitch());
+			}
+		});
+
+		ServerPlayNetworking.registerGlobalReceiver(DroneToolPayload.TYPE, (payload, context) -> {
+			ServerPlayer player = context.player();
+			Entity entity = player.level().getEntity(payload.entityId());
+			if (isHost(context.server(), player) && entity instanceof DroneEntity drone && drone.isOwnedBy(player)) {
+				context.responseSender().sendPacket(DroneTools.apply(player, drone, payload.seq(), payload.request()));
+			}
+		});
+
+		ServerPlayNetworking.registerGlobalReceiver(ResetTaskPayload.TYPE, (payload, context) -> {
+			ServerPlayer player = context.player();
+			if (!isHost(context.server(), player)) {
+				context.responseSender().sendPacket(TaskReadyPayload.failed(payload.requestId(), "only the singleplayer host can reset the arena"));
+				return;
+			}
+			TaskReadyPayload reply;
+			try {
+				reply = Arena.reset(player, payload);
+			} catch (IllegalArgumentException e) {
+				reply = TaskReadyPayload.failed(payload.requestId(), e.getMessage());
+			} catch (RuntimeException e) {
+				McDrone.LOGGER.error("task reset failed", e);
+				reply = TaskReadyPayload.failed(payload.requestId(), e.toString());
+			}
+			context.responseSender().sendPacket(reply);
+		});
+
+		ServerPlayNetworking.registerGlobalReceiver(ExportSchematicPayload.TYPE, (payload, context) -> {
+			ServerPlayer player = context.player();
+			if (!isHost(context.server(), player)) {
+				return;
+			}
+			String result;
+			try {
+				BlockPos a = payload.cornerA();
+				BlockPos b = payload.cornerB();
+				BlockPos min = new BlockPos(Math.min(a.getX(), b.getX()), Math.min(a.getY(), b.getY()), Math.min(a.getZ(), b.getZ()));
+				BlockPos max = new BlockPos(Math.max(a.getX(), b.getX()), Math.max(a.getY(), b.getY()), Math.max(a.getZ(), b.getZ()));
+				BlockPos size = max.subtract(min).offset(1, 1, 1);
+				if (size.getX() > BuildJob.MAX_SIZE || size.getY() > BuildJob.MAX_SIZE || size.getZ() > BuildJob.MAX_SIZE) {
+					throw new IllegalArgumentException("the selection is " + size.toShortString() + ", at most " + BuildJob.MAX_SIZE + " per side");
+				}
+				Schematic.fromWorld(player.level(), min, max).write(Arena.schematicFile(payload.name()));
+				result = "Saved " + payload.name() + " (" + size.toShortString() + ")";
+			} catch (IllegalArgumentException | IOException e) {
+				result = "Export failed: " + e.getMessage();
+			}
+			player.sendOverlayMessage(Component.literal(result));
+		});
+
+		ServerPlayNetworking.registerGlobalReceiver(SetFrozenPayload.TYPE, (payload, context) -> {
+			if (isHost(context.server(), context.player())) {
+				context.server().tickRateManager().setFrozen(payload.frozen());
+			}
+		});
+	}
+}

@@ -1,0 +1,13 @@
+{
+	"schemaVersion": 1,
+	"id": "mcdrone-test",
+	"version": "0.1.0",
+	"name": "MC Drone tests",
+	"environment": "*",
+	"entrypoints": {
+		"fabric-client-gametest": ["com.catherinepereira.mcdrone.test.DroneClientGameTest"]
+	},
+	"depends": {
+		"mcdrone": "*"
+	}
+}

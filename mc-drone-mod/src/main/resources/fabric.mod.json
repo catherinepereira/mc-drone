@@ -1,0 +1,25 @@
+{
+	"schemaVersion": 1,
+	"id": "mcdrone",
+	"version": "${version}",
+	"name": "MC Drone",
+	"description": "A pilotable drone whose camera and controls are exposed over a local bridge for recording and training.",
+	"authors": ["Cat Pereira"],
+	"environment": "*",
+	"entrypoints": {
+		"main": ["com.catherinepereira.mcdrone.McDrone"],
+		"client": ["com.catherinepereira.mcdrone.client.McDroneClient"]
+	},
+	"mixins": [
+		{
+			"config": "mcdrone.client.mixins.json",
+			"environment": "client"
+		}
+	],
+	"depends": {
+		"fabricloader": ">=0.19.5",
+		"minecraft": "~26.3",
+		"java": ">=25",
+		"fabric-api": "*"
+	}
+}

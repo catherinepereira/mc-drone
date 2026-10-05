@@ -1,0 +1,33 @@
+name: mc-drone
+
+services:
+  dashboard:
+    build:
+      context: .
+      target: dashboard
+    ports:
+      - "127.0.0.1:5318:5318"
+    volumes:
+      - ./mc-drone-dashboard/src:/app/src
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  train:
+    build:
+      context: .
+      target: train
+    # the model folder is mounted, so data, checkpoints, and reports land on the host
+    volumes:
+      - ./mc-drone-py/src:/repo/mc-drone-py/src
+      - ./mc-drone-model:/repo/mc-drone-model
+      - ./mc-drone-mod:/repo/mc-drone-mod:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    shm_size: 2gb
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

@@ -1,0 +1,6 @@
+# each package ignores its own build output and generated data, see its .gitignore
+.claude/
+.env
+*.log
+Thumbs.db
+.DS_Store

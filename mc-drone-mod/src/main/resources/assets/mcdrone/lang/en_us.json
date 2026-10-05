@@ -1,0 +1,14 @@
+{
+    "item.mcdrone.drone":  "Drone",
+    "block.mcdrone.marker":  "Drone Marker",
+    "entity.mcdrone.drone":  "Drone",
+    "key.category.mcdrone.main":  "MC Drone",
+    "key.mcdrone.pilot":  "Pilot drone",
+    "key.mcdrone.new_episode":  "New training episode",
+    "key.mcdrone.record":  "Toggle recording",
+    "key.mcdrone.inventory":  "Drone inventory and container",
+    "key.mcdrone.hud":  "Toggle drone HUD",
+    "item.mcdrone.remote":  "Drone Remote",
+    "key.mcdrone.copy":  "Start copy job",
+    "key.mcdrone.jobs":  "Drone jobs"
+}
