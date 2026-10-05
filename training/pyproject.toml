@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mc-drone-training"
+version = "0.1.0"
+description = "mcdrone, the bridge client and Gymnasium env for the mc-drone mod, and drone_model, the block reader, job planners, and learned skill"
+authors = [{ name = "Cat Pereira" }]
+requires-python = ">=3.11"
+# torch comes from the CUDA index, see the README
+dependencies = [
+  "numpy>=2.0",
+  "websockets>=15.0",
+  "gymnasium>=1.2",
+  "pillow>=11.0",
+  "nbtlib>=2.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.4"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mcdrone", "src/drone_model"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

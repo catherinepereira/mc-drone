@@ -4,21 +4,19 @@ Pilotable drone for Minecraft Java whose camera feeds external programs, for rec
 
 | Folder | What it is |
 | --- | --- |
-| [mc-drone-mod](mc-drone-mod) | Fabric mod: drone, piloting, jobs, bridge server, recorder, HUD |
-| [mc-drone-py](mc-drone-py) | Python client, Gymnasium env, dataset loader, schematic files |
-| [mc-drone-dashboard](mc-drone-dashboard) | Browser dev panel |
-| [mc-drone-model](mc-drone-model) | Block reader, job planners, learned skill, the drone brain |
+| [mod](mod) | Fabric mod: drone, piloting, jobs, bridge server, recorder, HUD |
+| [dashboard](dashboard) | Browser dev panel |
+| [training](training) | `mcdrone` (bridge client, Gymnasium env, dataset loader, schematic files) and `drone_model` (block reader, job planners, learned skill, the drone brain) |
+| [docs](docs) | [PROTOCOL.md](docs/PROTOCOL.md), the bridge protocol all three parts follow, and [SCOPE.md](docs/SCOPE.md), the plan and milestones |
 | [scripts](scripts) | Start the containers and Minecraft |
-
-[SCOPE.md](SCOPE.md) has the plan and milestones. The bridge protocol is in [mc-drone-mod/protocol/PROTOCOL.md](mc-drone-mod/protocol/PROTOCOL.md).
 
 ## Generated files
 
 | Folder | Written by |
 | --- | --- |
-| `mc-drone-model/data` | the mod's recordings in dev runs, and skill training data |
-| `mc-drone-model/checkpoints`, `mc-drone-model/reports` | training and evaluation |
-| `mc-drone-mod/run/logs` | the mod's JSONL logs in dev runs |
+| `training/data` | the mod's recordings in dev runs, and skill training data |
+| `training/checkpoints`, `training/reports` | training and evaluation |
+| `mod/run/logs` | the mod's JSONL logs in dev runs |
 
 All of them are gitignored. A normal install of the mod writes recordings and logs under `.minecraft/mcdrone/`.
 
@@ -38,9 +36,9 @@ The dashboard and the training environment run in Docker (Docker Desktop with th
 ```powershell
 scripts\up.ps1                                              # build and start both, dashboard on http://localhost:5318
 docker compose exec train python -m drone_model.brain       # run jobs started in game or on the dashboard
-docker compose exec train bash                              # training shell in mc-drone-model
+docker compose exec train bash                              # training shell in training/
 ```
 
-Both containers reach the game's bridge through `host.docker.internal`. The training container mounts `mc-drone-model`, so data, checkpoints, and reports land on the host. `scripts/up.sh` and `scripts/minecraft.sh` do the same on Linux and macOS.
+Both containers reach the game's bridge through `host.docker.internal`. The training container mounts `training`, so data, checkpoints, and reports land on the host. `scripts/up.sh` and `scripts/minecraft.sh` do the same on Linux and macOS.
 
-Without Docker, see each folder's README: `npm run dev` in the dashboard, and the `.venv` setup in mc-drone-model.
+Without Docker, see each folder's README: `npm run dev` in the dashboard, and the `.venv` setup in training.
