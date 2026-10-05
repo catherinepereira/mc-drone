@@ -1,6 +1,6 @@
 # training
 
-Two Python packages. `mcdrone` is the client for the mod's bridge: a Gymnasium env for every task, a loader for recorded episodes, and `.schem` files. `drone_model` holds the scripted experts, the block reader, the job planners, the learned cell skill, and the drone brain.
+Two Python packages. `mcdrone` is the client for the mod's bridge: a Gymnasium env for every task, a loader for recorded episodes, and `.schem` files. The scripted experts, block reader, job planners, learned cell skill, and drone brain are in `drone_model`.
 
 The navigate_to baseline is a small CNN that reads the drone's RGB and depth plus its velocity and heading and predicts the next action. It never sees the marker position and has to find the marker in the image.
 
@@ -213,7 +213,7 @@ src/drone_model/video.py         MP4s with camera, depth, mask, map, and stats
 
 ```powershell
 .venv\Scripts\python -m pytest                                              # fake bridge, no game needed
-$env:MCDRONE_E2E = "1"; .venv\Scripts\python -m pytest tests	est_e2e.py   # against a running game
+$env:MCDRONE_E2E = "1"; .venv\Scripts\python -m pytest tests\test_e2e.py   # against a running game
 ```
 
 ## Known limitations
