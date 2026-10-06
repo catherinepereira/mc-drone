@@ -25,6 +25,10 @@ public final class Observation {
 	public final float @Nullable [] depth;
 	public final short @Nullable [] mask;
 	public final short @Nullable [] blockStates;
+	// the third-person chase frame at its own size, filled in a frame after the rest, see Config.chaseWidth
+	public byte @Nullable [] chase;
+	public int chaseWidth;
+	public int chaseHeight;
 
 	public Observation(
 		long seq,
@@ -75,6 +79,10 @@ public final class Observation {
 			streams.add("state", stream(offset, this.blockStates.length * 2, "uint16", this.height, this.width));
 			offset += this.blockStates.length * 2;
 		}
+		if (this.chase != null) {
+			streams.add("chase", stream(offset, this.chase.length, "uint8", this.chaseHeight, this.chaseWidth, 3));
+			offset += this.chase.length;
+		}
 
 		JsonObject header = new JsonObject();
 		header.addProperty("type", "obs");
@@ -107,6 +115,9 @@ public final class Observation {
 			for (short v : this.blockStates) {
 				out.putShort(v);
 			}
+		}
+		if (this.chase != null) {
+			out.put(this.chase);
 		}
 		return out.array();
 	}

@@ -45,6 +45,7 @@ import java.util.function.Supplier;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Camera;
+import net.minecraft.client.CameraType;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -100,6 +101,9 @@ public final class ClientRuntime {
 	private int resetRequestSeq;
 
 	private final List<Consumer<Observation>> captureListeners = new ArrayList<>();
+	// set while the next frame renders from the third-person camera for the chase stream
+	private @Nullable Consumer<byte[]> chaseListener;
+	private int chaseWaitFrames;
 	private @Nullable JsonObject captureState;
 	private @Nullable JsonObject captureEpisode;
 	private @Nullable JsonObject captureAction;
@@ -599,6 +603,22 @@ public final class ClientRuntime {
 
 	/** Called from the level render END_MAIN event, before the GUI draws */
 	public void onFrameRendered(Camera camera) {
+		if (this.chaseListener != null) {
+			// the readback callback that asked for the chase view can land after this frame's camera was set up, so wait
+			// for a frame actually rendered from the third-person camera
+			if (!camera.isDetached() && this.chaseWaitFrames++ < 5) {
+				return;
+			}
+			Consumer<byte[]> listener = this.chaseListener;
+			this.chaseListener = null;
+			this.chaseWaitFrames = 0;
+			this.mc.options.setCameraType(CameraType.FIRST_PERSON);
+			FrameGrabber.grab(this.mc.gameRenderer.mainRenderTarget(), this.config.chaseWidth, this.config.chaseHeight, rgb -> this.onClientThread(() -> listener.accept(rgb)), err -> {
+				this.log.warn("capture.chase_failed", DroneLog.fields("error", err));
+				this.onClientThread(() -> listener.accept(null));
+			});
+			return;
+		}
 		if (this.captureListeners.isEmpty()) {
 			return;
 		}
@@ -612,7 +632,7 @@ public final class ClientRuntime {
 			this.captureMinFrames--;
 			return;
 		}
-		if (this.mc.getCameraEntity() != drone && this.captureWaitFrames++ < 10) {
+		if ((this.mc.getCameraEntity() != drone || camera.isDetached()) && this.captureWaitFrames++ < 10) {
 			return;
 		}
 		List<Consumer<Observation>> listeners = new ArrayList<>(this.captureListeners);
@@ -644,14 +664,27 @@ public final class ClientRuntime {
 		short[] outMask = this.config.wants("mask") ? mask : null;
 		short[] outStates = this.config.wants("state") ? blockStates : null;
 
-		Consumer<byte[]> finish = rgb -> {
-			double totalMs = (System.nanoTime() - t0) / 1e6;
-			this.metrics.capture(totalMs, raycastMs);
-			Observation obs = new Observation(seq, frameTick, w, h, state, episode, action, rgb, outDepth, outMask, outStates);
+		Consumer<Observation> deliver = obs -> {
 			for (Consumer<Observation> listener : listeners) {
 				listener.accept(obs);
 			}
 			this.recorder.onObservation(obs);
+		};
+		Consumer<byte[]> finish = rgb -> {
+			double totalMs = (System.nanoTime() - t0) / 1e6;
+			this.metrics.capture(totalMs, raycastMs);
+			Observation obs = new Observation(seq, frameTick, w, h, state, episode, action, rgb, outDepth, outMask, outStates);
+			if (!this.config.wants("chase")) {
+				deliver.accept(obs);
+				return;
+			}
+			this.mc.options.setCameraType(CameraType.THIRD_PERSON_BACK);
+			this.chaseListener = chase -> {
+				obs.chase = chase;
+				obs.chaseWidth = this.config.chaseWidth;
+				obs.chaseHeight = this.config.chaseHeight;
+				deliver.accept(obs);
+			};
 		};
 		if (this.config.wants("rgb")) {
 			FrameGrabber.grab(target, w, h, rgb -> this.onClientThread(() -> finish.accept(rgb)), err -> {

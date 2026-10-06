@@ -4,6 +4,8 @@ import com.catherinepereira.mcdrone.McDrone;
 import com.catherinepereira.mcdrone.ModContent;
 import com.catherinepereira.mcdrone.RemoteInput;
 import com.catherinepereira.mcdrone.client.hud.DroneHud;
+import com.catherinepereira.mcdrone.client.render.DroneModel;
+import com.catherinepereira.mcdrone.client.render.DroneRenderer;
 import com.catherinepereira.mcdrone.net.DroneSyncPayload;
 import com.catherinepereira.mcdrone.net.RegionsPayload;
 import com.catherinepereira.mcdrone.net.TaskReadyPayload;
@@ -15,18 +17,19 @@ import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.fabricmc.fabric.api.client.rendering.v1.EntityRendererRegistry;
+import net.fabricmc.fabric.api.client.rendering.v1.ModelLayerRegistry;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
 import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderEvents;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.renderer.entity.ThrownItemRenderer;
 
 public class McDroneClient implements ClientModInitializer {
 	private static final KeyMapping.Category CATEGORY = KeyMapping.Category.register(McDrone.id("main"));
 
 	@Override
 	public void onInitializeClient() {
-		EntityRendererRegistry.register(ModContent.DRONE, ctx -> new ThrownItemRenderer<>(ctx, 1.5F, true));
+		ModelLayerRegistry.registerModelLayer(DroneRenderer.LAYER, DroneModel::createLayer);
+		EntityRendererRegistry.register(ModContent.DRONE, DroneRenderer::new);
 
 		KeyMapping pilot = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.mcdrone.pilot", InputConstants.Type.KEYBOARD, InputConstants.KEY_V, CATEGORY));
 		KeyMapping newEpisode = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.mcdrone.new_episode", InputConstants.Type.KEYBOARD, InputConstants.KEY_N, CATEGORY));

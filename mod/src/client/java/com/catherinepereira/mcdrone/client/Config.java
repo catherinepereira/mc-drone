@@ -16,13 +16,16 @@ import java.util.List;
 /** Saved to config/mcdrone.json, editable from the dashboard */
 public final class Config {
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
-	private static final List<String> STREAMS = List.of("rgb", "depth", "mask", "state");
+	private static final List<String> STREAMS = List.of("rgb", "depth", "mask", "state", "chase");
 
 	public int port = 8318;
 	public int width = 160;
 	public int height = 120;
 	// state is a label stream for training the block reader, off unless asked for
 	public List<String> streams = new ArrayList<>(List.of("rgb", "depth", "mask"));
+	// chase is a third-person view from behind the drone for videos, rendered as an extra frame after each capture
+	public int chaseWidth = 640;
+	public int chaseHeight = 360;
 	public int streamHz = 10;
 	public float depthMax = 64.0F;
 	public float maxSpeed = 0.4F;
@@ -112,6 +115,8 @@ public final class Config {
 	private void clamp() {
 		this.width = Math.clamp(this.width, 16, 1024);
 		this.height = Math.clamp(this.height, 16, 1024);
+		this.chaseWidth = Math.clamp(this.chaseWidth, 16, 1920);
+		this.chaseHeight = Math.clamp(this.chaseHeight, 16, 1080);
 		this.streamHz = Math.clamp(this.streamHz, 1, 20);
 		this.radius = Math.clamp(this.radius, 4, 48);
 		this.maxSteps = Math.clamp(this.maxSteps, 10, 100000);

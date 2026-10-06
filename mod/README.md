@@ -1,6 +1,6 @@
 # mod
 
-Fabric mod for Minecraft Java 26.3 that adds a pilotable drone with a 27-slot inventory, a mining tool, block placing, and container access. A local bridge on port 8318 streams the drone's camera, depth, and semantic mask, and accepts flight and tool commands, so scripts and models can fly it. Flights can be recorded as datasets.
+Fabric mod for Minecraft Java 26.3 that adds a pilotable drone with a 27-slot inventory, a mining tool, block placing, and container access. A local bridge on port 8318 streams the drone's camera, depth, semantic mask, and a third-person view of the quadcopter, and accepts flight and tool commands, so scripts and models can fly it. Flights can be recorded as datasets.
 
 ## Requirements
 

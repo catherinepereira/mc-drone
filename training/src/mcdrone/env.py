@@ -58,6 +58,7 @@ class DroneEnv(gym.Env):
         client: DroneClient | None = None,
         render_mode: str | None = None,
         action_pause_ms: int | None = None,
+        chase_size: tuple[int, int] = (640, 360),
     ) -> None:
         super().__init__()
         self.host = host
@@ -76,6 +77,7 @@ class DroneEnv(gym.Env):
         self.render_mode = render_mode
         # None keeps the mod's setting, 0 skips the pause after tool actions for fast collection and training
         self.action_pause_ms = action_pause_ms
+        self.chase_size = chase_size
         self._client = client
         self._configured = False
         self._last: Observation | None = None
@@ -103,6 +105,8 @@ class DroneEnv(gym.Env):
             obs_spaces["mask"] = spaces.Box(0, 65535, shape=(height, width), dtype=np.uint16)
         if "state" in self.streams:
             obs_spaces["block_states"] = spaces.Box(0, 65535, shape=(height, width), dtype=np.uint16)
+        if "chase" in self.streams:
+            obs_spaces["chase"] = spaces.Box(0, 255, shape=(chase_size[1], chase_size[0], 3), dtype=np.uint8)
         state_dim = STATE_DIM + (0 if hide_marker else MARKER_DIM)
         obs_spaces["state"] = spaces.Box(-np.inf, np.inf, shape=(state_dim,), dtype=np.float32)
         # position inside the geofence, -1 to 1 per axis, beyond that is out of bounds
@@ -119,7 +123,9 @@ class DroneEnv(gym.Env):
             self._client = DroneClient(self.host, self.port, role="controller", log_dir=self.log_dir, client_name="mcdrone-env")
             self._client.connect()
         if not self._configured:
-            extra = {}
+            extra: dict[str, Any] = {}
+            if "chase" in self.streams:
+                extra.update(chaseWidth=self.chase_size[0], chaseHeight=self.chase_size[1])
             if self.action_pause_ms is not None:
                 # configure saves to the mod's config, so remember the player's pause to put it back on close
                 self._saved_pause = self._client.config.get("actionPauseMs")
@@ -185,6 +191,8 @@ class DroneEnv(gym.Env):
             out["mask"] = obs.mask
         if "state" in self.streams:
             out["block_states"] = obs.block_states
+        if "chase" in self.streams:
+            out["chase"] = obs.chase
         out["state"] = state_vector(obs.state, include_marker=not self.hide_marker)
         out["bounds"] = bounds_vector(obs.state)
         if self.tools:

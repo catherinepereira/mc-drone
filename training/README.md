@@ -109,7 +109,10 @@ A small CNN reads the drone's RGB and depth plus its velocity and heading and pr
 .venv\Scripts\python -m drone_model.evaluate.policy --checkpoint checkpoints/ppo.pt --episodes 50 --obstacles 16
 .venv\Scripts\python -m drone_model.evaluate.policy --task chest_transfer --policy expert --terrain rough
 .venv\Scripts\python -m drone_model.evaluate.video --task dig_block --terrain rough                  # MP4 into ../../claudevids
+.venv\Scripts\python -m drone_model.evaluate.video --task gather_build --size 4 --scan               # a job, filmed from behind the drone
 ```
+
+Videos show the drone from behind with vanilla's third-person camera (the `chase` stream) side by side with what its own camera sees, with depth inset. `--view drone` shows the drone's camera full size with depth and the semantic mask instead.
 
 ## Block reader
 
@@ -156,6 +159,7 @@ $env:MCDRONE_E2E = "1"; .venv\Scripts\python -m pytest tests\test_e2e.py   # aga
 
 - The cell skill is evaluated on flat terrain only, and on copies no larger than 5 wide.
 - Vision harvest jobs sometimes leave a plot unplanted.
+- A harvest arena's count of ripe crops at the start varies between runs of the same seed (22, 20, and 15 for seed 100000), so harvest results aren't comparable run to run.
 - Copy jobs in vision read only what the survey views show. A cell hidden inside a solid build reads as air.
 - Copy and mine jobs in vision work with the blocks the reader knows (about 40 classes). Build jobs and scanned jobs place any block.
 - Mine jobs and gathering dig open trenches or shafts from the top, the drone doesn't fly through enclosed tunnels.

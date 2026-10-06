@@ -32,6 +32,8 @@ class Observation:
     mask: np.ndarray | None = None
     # the "state" stream, 1 + block state id per pixel, labels for training the block reader
     block_states: np.ndarray | None = None
+    # the third-person view from behind the drone, at its own size, for videos
+    chase: np.ndarray | None = None
     header: dict[str, Any] = field(default_factory=dict, repr=False)
 
     @property
@@ -64,6 +66,7 @@ def decode_obs(data: bytes) -> Observation:
         depth=arrays.get("depth"),
         mask=arrays.get("mask"),
         block_states=arrays.get("state"),
+        chase=arrays.get("chase"),
         header=header,
     )
 
@@ -78,6 +81,7 @@ def encode_obs(obs: Observation) -> bytes:
         ("depth", obs.depth, "float32"),
         ("mask", obs.mask, "uint16"),
         ("state", obs.block_states, "uint16"),
+        ("chase", obs.chase, "uint8"),
     ):
         if arr is None:
             continue

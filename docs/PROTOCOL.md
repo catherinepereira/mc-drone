@@ -136,6 +136,7 @@ Header:
 - `depth` is z-distance from the camera plane in blocks, `depthMax` (config) where nothing was hit.
 - `mask` is 0 for sky, `1 + block raw id` for blocks, and `entityBase + entity type raw id` for entities. `welcome.maskIds` lists names: `blocks[i]` is id `i + 1`, `entities[j]` is id `entityBase + j`.
 - `state` (off unless `streams` includes it) is 0 for sky and entities and `1 + block state id` for blocks, so it carries properties such as a crop's age. `GET /api/states` lists the names by id, such as `minecraft:wheat[age=7]`. It exists to label training data for the block reader, policies don't read it.
+- `chase` (off unless `streams` includes it) is an RGB view from vanilla's third-person camera behind the drone, `[chaseHeight, chaseWidth, 3]` (config, default 640x360), for videos. The mod renders it as an extra frame after the drone's own, so it costs a frame per observation. Policies don't read it.
 - All multi-byte values are little-endian.
 
 ## HTTP
