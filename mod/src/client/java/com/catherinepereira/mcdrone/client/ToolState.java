@@ -1,5 +1,6 @@
 package com.catherinepereira.mcdrone.client;
 
+import com.catherinepereira.mcdrone.Json;
 import com.catherinepereira.mcdrone.entity.DroneEntity;
 import com.catherinepereira.mcdrone.net.DroneSyncPayload;
 import com.google.gson.JsonArray;
@@ -91,7 +92,7 @@ public final class ToolState {
 		state.addProperty("selectedSlot", selectedSlot);
 		if (this.containerPos != null) {
 			JsonObject c = new JsonObject();
-			c.add("pos", pos(this.containerPos));
+			c.add("pos", Json.pos(this.containerPos));
 			c.addProperty("block", BuiltInRegistries.BLOCK.getKey(level.getBlockState(this.containerPos).getBlock()).toString());
 			c.add("slots", slots(this.container));
 			state.add("container", c);
@@ -100,7 +101,7 @@ public final class ToolState {
 		}
 		if (this.breakingPos != null) {
 			JsonObject b = new JsonObject();
-			b.add("pos", pos(this.breakingPos));
+			b.add("pos", Json.pos(this.breakingPos));
 			b.addProperty("progress", this.breakProgress);
 			state.add("breaking", b);
 		} else {
@@ -124,13 +125,5 @@ public final class ToolState {
 			out.add(slot);
 		}
 		return out;
-	}
-
-	private static JsonArray pos(BlockPos p) {
-		JsonArray a = new JsonArray();
-		a.add(p.getX());
-		a.add(p.getY());
-		a.add(p.getZ());
-		return a;
 	}
 }

@@ -15,17 +15,17 @@ from pathlib import Path
 import numpy as np
 from mcdrone import DroneEnv
 
-from .memory import VoxelMemory
-from .reader import Reader
-from .tool_experts import make_expert
+from ..paths import CHECKPOINTS, REPORTS
+from ..perception.memory import VoxelMemory
+from ..perception.reader import Reader
+from ..experts.tools import make_expert
 
-ROOT = Path(__file__).resolve().parents[2]
 EVAL_SEED = 100_000
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--checkpoint", type=Path, default=ROOT / "checkpoints" / "reader.pt")
+    parser.add_argument("--checkpoint", type=Path, default=CHECKPOINTS / "reader.pt")
     parser.add_argument("--episodes", type=int, default=10)
     parser.add_argument("--terrain", choices=["flat", "rough", "cave"], default="flat")
     parser.add_argument("--obstacles", type=int, default=4)
@@ -69,8 +69,8 @@ def main() -> None:
         "exact_reads": sum(r["exact"] for r in results) / len(results),
         "results": results,
     }
-    out = ROOT / "reports" / f"reader-{args.terrain}-{datetime.now():%Y%m%d-%H%M%S}.json"
-    out.parent.mkdir(exist_ok=True)
+    out = REPORTS / "reader" / f"{args.terrain}-{datetime.now():%Y%m%d-%H%M%S}.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(summary, indent=2))
     print(f"cell accuracy {summary['cell_accuracy']:.1%}, block recall {summary['block_recall']:.1%}, exact reads {summary['exact_reads']:.0%}, report {out}")
 

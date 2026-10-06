@@ -1,5 +1,6 @@
 package com.catherinepereira.mcdrone.tool;
 
+import com.catherinepereira.mcdrone.Json;
 import com.catherinepereira.mcdrone.ModContent;
 import com.catherinepereira.mcdrone.entity.DroneEntity;
 import com.catherinepereira.mcdrone.net.DroneSyncPayload;
@@ -150,7 +151,7 @@ public final class DroneTools {
 		}
 		changed.add(pos);
 		JsonObject e = event("break", "block", BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString());
-		e.add("pos", posJson(pos));
+		e.add("pos", Json.pos(pos));
 		events.add(e);
 		stopMining(level, drone);
 	}
@@ -207,7 +208,7 @@ public final class DroneTools {
 		drone.inventory.setChanged();
 		changed.add(target);
 		JsonObject e = event("place", "block", BuiltInRegistries.BLOCK.getKey(blockItem.getBlock()).toString());
-		e.add("pos", posJson(target));
+		e.add("pos", Json.pos(target));
 		events.add(e);
 		if (record != null && record.goal != null && !target.equals(record.goal)) {
 			record.wrongPlacements++;
@@ -250,7 +251,7 @@ public final class DroneTools {
 		}
 		drone.openContainer = pos.immutable();
 		JsonObject e = event("open", "block", BuiltInRegistries.BLOCK.getKey(level.getBlockState(pos).getBlock()).toString());
-		e.add("pos", posJson(pos));
+		e.add("pos", Json.pos(pos));
 		events.add(e);
 	}
 
@@ -359,13 +360,5 @@ public final class DroneTools {
 		e.addProperty("type", type);
 		e.addProperty(key, value);
 		return e;
-	}
-
-	private static JsonArray posJson(BlockPos p) {
-		JsonArray a = new JsonArray();
-		a.add(p.getX());
-		a.add(p.getY());
-		a.add(p.getZ());
-		return a;
 	}
 }

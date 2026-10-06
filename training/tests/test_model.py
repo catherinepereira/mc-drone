@@ -4,9 +4,9 @@ import numpy as np
 import torch
 from PIL import Image
 
-from drone_model.data import load_demos
-from drone_model.expert import expert_action
-from drone_model.model import ACTION_DIM, DronePolicy, to_image
+from drone_model.train.demos import load_demos
+from drone_model.experts.navigate import expert_action
+from drone_model.policies.cnn import ACTION_DIM, DronePolicy, to_image
 
 
 def test_policy_output_shape_and_range():
@@ -45,7 +45,7 @@ def test_load_demos_uses_expert_labels(tmp_path):
 
 
 def test_expert_plans_around_a_pillar():
-    from drone_model.expert import Pillars, waypoint
+    from drone_model.experts.navigate import Pillars, waypoint
 
     # pillar sits squarely between the drone and the marker
     arena = {"origin": [0, -61, 0], "radius": 12, "obstacles": [[-1, 3, 2, 9]]}
@@ -58,7 +58,7 @@ def test_expert_plans_around_a_pillar():
 
 
 def test_gae_stops_at_episode_boundaries():
-    from drone_model.ppo import gae
+    from drone_model.train.ppo import gae
 
     rewards = np.array([1.0, 1.0, 1.0], np.float32)
     values = np.zeros(3, np.float32)
@@ -70,7 +70,7 @@ def test_gae_stops_at_episode_boundaries():
 
 
 def test_planner_escapes_when_starting_inside_clearance():
-    from drone_model.expert import Pillars, waypoint
+    from drone_model.experts.navigate import Pillars, waypoint
 
     arena = {"origin": [0, -61, 0], "radius": 12, "obstacles": [[4, -1, 2, 3]]}
     # drone hugging the east face of the pillar, chest far to the west

@@ -1,8 +1,8 @@
 package com.catherinepereira.mcdrone.task;
 
-import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Vec3i;
 import net.minecraft.server.level.ServerLevel;
 
 /** Work a player hands the drone in their own world, or a training arena's equivalent */
@@ -19,15 +19,11 @@ public interface DroneJob {
 	/** The boxes the job works in, as inclusive min and max corners, for the geofence and the reach check */
 	BlockPos[] corners();
 
-	static JsonArray box(BlockPos min, BlockPos max) {
-		JsonArray a = new JsonArray();
-		a.add(min.getX());
-		a.add(min.getY());
-		a.add(min.getZ());
-		a.add(max.getX());
-		a.add(max.getY());
-		a.add(max.getZ());
-		return a;
+	/** Throws when a box of this size is longer than maxSide on any side, what names the box in the message */
+	static void checkSize(Vec3i size, int maxSide, String what) {
+		if (size.getX() > maxSide || size.getY() > maxSide || size.getZ() > maxSide) {
+			throw new IllegalArgumentException(what + " " + size.toShortString() + " is larger than " + maxSide + " per side");
+		}
 	}
 
 	static boolean inside(BlockPos p, BlockPos min, BlockPos max) {

@@ -45,6 +45,8 @@ public final class Config {
 	public String materials = "inventory";
 	// a beat after each break, place, open, close, or transfer so a watcher can follow along, 0 for training runs
 	public int actionPauseMs = 300;
+	// "vision" reads blocks with the camera, "scan" also hands the drone each job box read straight from the world
+	public String perception = "vision";
 	public Integer arenaX;
 	public Integer arenaZ;
 	public String logLevel = "info";
@@ -118,6 +120,9 @@ public final class Config {
 		}
 		this.streams.removeIf(s -> !STREAMS.contains(s));
 		this.actionPauseMs = Math.clamp(this.actionPauseMs, 0, 3000);
+		if (!"scan".equals(this.perception)) {
+			this.perception = "vision";
+		}
 		if (!"unlimited".equals(this.materials)) {
 			this.materials = "inventory";
 		}

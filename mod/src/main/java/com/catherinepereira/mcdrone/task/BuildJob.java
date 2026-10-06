@@ -1,7 +1,10 @@
 package com.catherinepereira.mcdrone.task;
 
+import com.catherinepereira.mcdrone.Json;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import java.util.ArrayList;
+import java.util.List;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.block.state.BlockState;
@@ -19,12 +22,12 @@ public final class BuildJob implements DroneJob {
 	public final BlockPos dest;
 	public final @Nullable BlockPos sourceMin;
 	public final @Nullable String schematic;
+	// where the drone may dig for materials, when it has to gather them
+	public @Nullable BlockPos gatherMin;
+	public @Nullable BlockPos gatherMax;
 
 	private BuildJob(Schematic target, BlockPos dest, @Nullable BlockPos sourceMin, @Nullable String schematic) {
-		BlockPos size = target.size();
-		if (size.getX() > MAX_SIZE || size.getY() > MAX_SIZE || size.getZ() > MAX_SIZE) {
-			throw new IllegalArgumentException("build " + size.toShortString() + " is larger than " + MAX_SIZE + " per side");
-		}
+		DroneJob.checkSize(target.size(), MAX_SIZE, "build");
 		this.target = target;
 		this.dest = dest;
 		this.sourceMin = sourceMin;
@@ -33,17 +36,21 @@ public final class BuildJob implements DroneJob {
 
 	/** Corners in any order, dest is where the source's min corner lands */
 	public static BuildJob copy(ServerLevel level, BlockPos a, BlockPos b, BlockPos dest) {
-		BlockPos min = new BlockPos(Math.min(a.getX(), b.getX()), Math.min(a.getY(), b.getY()), Math.min(a.getZ(), b.getZ()));
-		BlockPos max = new BlockPos(Math.max(a.getX(), b.getX()), Math.max(a.getY(), b.getY()), Math.max(a.getZ(), b.getZ()));
-		BlockPos size = max.subtract(min).offset(1, 1, 1);
-		if (size.getX() > MAX_SIZE || size.getY() > MAX_SIZE || size.getZ() > MAX_SIZE) {
-			throw new IllegalArgumentException("copy region " + size.toShortString() + " is larger than " + MAX_SIZE + " per side");
-		}
+		BlockPos min = BlockPos.min(a, b);
+		BlockPos max = BlockPos.max(a, b);
+		DroneJob.checkSize(max.subtract(min).offset(1, 1, 1), MAX_SIZE, "copy region");
 		return new BuildJob(Schematic.fromWorld(level, min, max), dest, min, null);
 	}
 
 	public static BuildJob build(Schematic target, String name, BlockPos dest) {
 		return new BuildJob(target, dest, null, name);
+	}
+
+	/** Corners in any order of the box the drone mines its materials from */
+	public BuildJob gatherFrom(BlockPos a, BlockPos b) {
+		this.gatherMin = BlockPos.min(a, b);
+		this.gatherMax = BlockPos.max(a, b);
+		return this;
 	}
 
 	public BlockPos destMax() {
@@ -75,18 +82,24 @@ public final class BuildJob implements DroneJob {
 		return new int[] {correct, total, wrong};
 	}
 
-	/** Building and clearing wrong blocks happens in the destination box only */
+	/** Building and clearing wrong blocks happens in the destination box, mining for materials in the gather box */
 	@Override
 	public boolean allows(BlockPos pos) {
-		return DroneJob.inside(pos, this.dest, this.destMax());
+		return DroneJob.inside(pos, this.dest, this.destMax()) || (this.gatherMin != null && DroneJob.inside(pos, this.gatherMin, this.gatherMax));
 	}
 
 	@Override
 	public BlockPos[] corners() {
-		if (this.sourceMin == null) {
-			return new BlockPos[] {this.dest, this.destMax()};
+		List<BlockPos> out = new ArrayList<>(List.of(this.dest, this.destMax()));
+		if (this.sourceMin != null) {
+			out.add(this.sourceMin);
+			out.add(this.sourceMin.offset(this.target.size()).offset(-1, -1, -1));
 		}
-		return new BlockPos[] {this.dest, this.destMax(), this.sourceMin, this.sourceMin.offset(this.target.size()).offset(-1, -1, -1)};
+		if (this.gatherMin != null) {
+			out.add(this.gatherMin);
+			out.add(this.gatherMax);
+		}
+		return out.toArray(BlockPos[]::new);
 	}
 
 	/** What the drone is told: the boxes as inclusive min and max corners, and the schematic for a build job */
@@ -95,12 +108,15 @@ public final class BuildJob implements DroneJob {
 		JsonObject json = new JsonObject();
 		json.addProperty("kind", this.sourceMin != null ? "copy" : "build");
 		if (this.sourceMin != null) {
-			json.add("source", DroneJob.box(this.sourceMin, this.sourceMin.offset(this.target.size()).offset(-1, -1, -1)));
+			json.add("source", Json.box(this.sourceMin, this.sourceMin.offset(this.target.size()).offset(-1, -1, -1)));
 		}
 		if (this.schematic != null) {
 			json.addProperty("schematic", this.schematic);
 		}
-		json.add("dest", DroneJob.box(this.dest, this.destMax()));
+		json.add("dest", Json.box(this.dest, this.destMax()));
+		if (this.gatherMin != null) {
+			json.add("gather", Json.box(this.gatherMin, this.gatherMax));
+		}
 		JsonArray size = new JsonArray();
 		size.add(this.target.width);
 		size.add(this.target.height);

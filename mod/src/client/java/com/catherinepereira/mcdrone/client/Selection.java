@@ -1,9 +1,9 @@
 package com.catherinepereira.mcdrone.client;
 
+import com.catherinepereira.mcdrone.Json;
 import com.catherinepereira.mcdrone.task.BuildJob;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
-import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
@@ -63,11 +63,11 @@ public final class Selection {
 
 	public JsonObject toJson() {
 		JsonObject json = new JsonObject();
-		json.add("cornerA", pos(this.cornerA));
-		json.add("cornerB", pos(this.cornerB));
-		json.add("dest", pos(this.dest));
+		json.add("cornerA", Json.pos(this.cornerA));
+		json.add("cornerB", Json.pos(this.cornerB));
+		json.add("dest", Json.pos(this.dest));
 		BlockPos size = this.size();
-		json.add("size", pos(size));
+		json.add("size", Json.pos(size));
 		json.addProperty("problem", this.problem());
 		return json;
 	}
@@ -124,17 +124,6 @@ public final class Selection {
 				level.addParticle(dust, xy[0], xy[1], z, 0, 0, 0);
 			}
 		}
-	}
-
-	private static JsonElement pos(@Nullable BlockPos p) {
-		if (p == null) {
-			return JsonNull.INSTANCE;
-		}
-		JsonArray a = new JsonArray();
-		a.add(p.getX());
-		a.add(p.getY());
-		a.add(p.getZ());
-		return a;
 	}
 
 	private static @Nullable BlockPos parse(JsonElement e) {

@@ -11,7 +11,11 @@ public enum TaskKind {
 	BUILD_SCHEMATIC("build_schematic"),
 	MINE_REGION("mine_region"),
 	HARVEST_CROPS("harvest_crops"),
-	HARVEST_REGION("harvest_region");
+	HARVEST_REGION("harvest_region"),
+	COPY_BUILD("copy_build"),
+	SCHEMATIC_BUILD("schematic_build"),
+	MINE_DEPOSIT("mine_deposit"),
+	GATHER_BUILD("gather_build");
 
 	/** Jobs run in the player's own world, the rest build a training arena */
 	public boolean isJob() {

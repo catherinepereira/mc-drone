@@ -13,7 +13,7 @@ import numpy as np
 import torch
 from torch import nn
 
-from .tool_experts import BUILD_PALETTE, TOOLS
+from ..experts.tools import BUILD_PALETTE, TOOLS
 
 # block and item names the policy tells apart, everything else is "other"
 VOCAB = (

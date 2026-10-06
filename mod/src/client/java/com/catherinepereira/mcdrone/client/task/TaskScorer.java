@@ -196,12 +196,12 @@ public final class TaskScorer {
 				reward += 3.0 * (prev[3] - next[3]) / Math.max(1, next[4]);
 				won = next[0] == 0 && next[3] == 0;
 			}
-			case MINE_REGION -> {
+			case MINE_REGION, MINE_DEPOSIT -> {
 				double initial = Math.max(1, next[1]);
 				reward += 10.0 * (prev[0] - next[0]) / initial;
 				won = next[0] == 0;
 			}
-			case REPLICATE_BUILD, COPY_REGION, BUILD_SCHEMATIC -> {
+			case REPLICATE_BUILD, COPY_REGION, BUILD_SCHEMATIC, COPY_BUILD, SCHEMATIC_BUILD, GATHER_BUILD -> {
 				double total = Math.max(1, next[1]);
 				reward += 10.0 * (next[0] - prev[0]) / total;
 				reward -= 1.0 * (next[2] - prev[2]);
@@ -244,7 +244,7 @@ public final class TaskScorer {
 				yield next != null ? next : point("targetChest");
 			}
 			// no distance shaping, the drone has to study the reference before heading to the build site
-			case REPLICATE_BUILD, COPY_REGION, BUILD_SCHEMATIC, MINE_REGION, HARVEST_CROPS, HARVEST_REGION -> null;
+			case REPLICATE_BUILD, COPY_REGION, BUILD_SCHEMATIC, MINE_REGION, HARVEST_CROPS, HARVEST_REGION, COPY_BUILD, SCHEMATIC_BUILD, MINE_DEPOSIT, GATHER_BUILD -> null;
 		};
 	}
 

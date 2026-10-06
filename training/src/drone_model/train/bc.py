@@ -11,11 +11,10 @@ import numpy as np
 import torch
 from torch import nn
 
-from .data import Demos, load_demos
-from .model import DronePolicy, to_image
+from ..paths import CHECKPOINTS, DATA
+from .demos import Demos, load_demos
+from ..policies.cnn import DronePolicy, to_image
 
-ROOT = Path(__file__).resolve().parents[2]
-DATA = ROOT / "data"
 
 
 def batches(demos: Demos, batch_size: int, shuffle: bool, rng: np.random.Generator):
@@ -53,7 +52,7 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--val-fraction", type=float, default=0.15)
-    parser.add_argument("--out", type=Path, default=ROOT / "checkpoints" / "bc.pt")
+    parser.add_argument("--out", type=Path, default=CHECKPOINTS / "bc.pt")
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 

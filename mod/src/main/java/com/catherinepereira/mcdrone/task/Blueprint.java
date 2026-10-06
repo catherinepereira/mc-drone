@@ -104,16 +104,7 @@ public final class Blueprint {
 		for (Block decoy : this.decoys) {
 			stacks.add(new ItemStack(decoy.asItem(), 4 + rng.nextInt(5)));
 		}
-		List<ItemStack> layout = new ArrayList<>(Collections.nCopies(slots, ItemStack.EMPTY));
-		List<Integer> order = new ArrayList<>();
-		for (int i = 0; i < slots; i++) {
-			order.add(i);
-		}
-		Collections.shuffle(order, rng);
-		for (int i = 0; i < stacks.size(); i++) {
-			layout.set(order.get(i), stacks.get(i));
-		}
-		return layout;
+		return Structures.scatter(rng, stacks, slots);
 	}
 
 	/** Cells of the build site that match, how many the blueprint has, and blocks there that don't belong */

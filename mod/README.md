@@ -41,7 +41,7 @@ Hold the drone remote to select. Left click a block for the first source corner,
 
 The Regions panel on the dashboard saves the selection as a named region: `safe` boxes are never broken or built in by a drone, `mine` and `farm` boxes are where those jobs work. Holding the remote shows every region.
 
-The drone flies a job with a learned policy over the bridge, which reads the source with its camera, never from the world data. The brain runs from `training`, see its README. Place actions name the block, and the drone takes it from its inventory, or with `materials` set to `unlimited` in the config, places it without using items.
+The drone flies a job with a learned policy over the bridge. With `perception` set to `vision` (the default) it reads blocks with its camera, never from the world data. With `scan` the server also writes each of the job's boxes to a schematic for it, read straight from the world. The brain runs from `training`, see its README. Place actions name the block, and the drone takes it from its inventory, or with `materials` set to `unlimited` in the config, places it without using items.
 
 ## Tasks
 

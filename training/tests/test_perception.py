@@ -2,7 +2,7 @@ import math
 
 import numpy as np
 
-from drone_model.perception import WorldMap
+from drone_model.perception.worldmap import WorldMap
 
 MASK_IDS = {"blocks": ["minecraft:stone"]}
 

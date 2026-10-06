@@ -1,7 +1,7 @@
 import numpy as np
 
-from drone_model.memory import VoxelMemory
-from drone_model.reader import CLASSES, SKY
+from drone_model.perception.memory import VoxelMemory
+from drone_model.perception.reader import CLASSES, SKY
 
 BRICKS = CLASSES.index("minecraft:bricks")
 WHEAT = CLASSES.index("minecraft:wheat")

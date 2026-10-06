@@ -1,5 +1,6 @@
 package com.catherinepereira.mcdrone.client;
 
+import com.catherinepereira.mcdrone.Json;
 import com.catherinepereira.mcdrone.RemoteInput;
 import com.catherinepereira.mcdrone.ModContent;
 import com.catherinepereira.mcdrone.entity.DroneEntity;
@@ -735,6 +736,8 @@ public final class ClientRuntime {
 		int targets = options.has("targets") ? options.get("targets").getAsInt() : (kind == TaskKind.MINE_AND_DELIVER ? 3 : 1);
 		String terrain = options.has("terrain") ? options.get("terrain").getAsString() : this.config.terrain;
 		int obstacles = options.has("obstacles") ? options.get("obstacles").getAsInt() : this.config.obstacles;
+		int size = options.has("size") ? options.get("size").getAsInt() : 5;
+		boolean scan = "scan".equals(options.has("perception") ? options.get("perception").getAsString() : this.config.perception);
 		int maxSteps = options.has("maxSteps") ? options.get("maxSteps").getAsInt() : defaultMaxSteps(kind, this.config.maxSteps);
 		float successDist = options.has("successDist") ? options.get("successDist").getAsFloat() : this.config.successDist;
 		this.pendingReset = new PendingReset(++this.resetRequestSeq, kind, seed, radius, obstacles, targets, maxSteps, successDist, session, replyId);
@@ -746,7 +749,7 @@ public final class ClientRuntime {
 		boolean hasOrigin = this.config.arenaX != null && this.config.arenaZ != null;
 		ClientPlayNetworking.send(new ResetTaskPayload(
 			this.pendingReset.requestId(), kind.id, terrain, seed, radius, obstacles, targets, hasOrigin, hasOrigin ? this.config.arenaX : 0,
-			hasOrigin ? this.config.arenaZ : 0, region, subject
+			hasOrigin ? this.config.arenaZ : 0, region, subject, size, scan
 		));
 		this.log.info(
 			"task.reset_requested",
@@ -846,6 +849,7 @@ public final class ClientRuntime {
 			case CHEST_TRANSFER -> 600;
 			case MINE_AND_DELIVER, REPLICATE_BUILD -> 900;
 			case HARVEST_CROPS -> 1500;
+			case COPY_BUILD, SCHEMATIC_BUILD, MINE_DEPOSIT, GATHER_BUILD -> 20000;
 			// a job runs until it's done or stopped, sized for the largest 16x16x16 builds
 			case COPY_REGION, BUILD_SCHEMATIC, MINE_REGION, HARVEST_REGION -> 100000;
 		};
@@ -940,10 +944,10 @@ public final class ClientRuntime {
 		meta.addProperty("modVersion", FabricLoader.getInstance().getModContainer("mcdrone").map(c -> c.getMetadata().getVersion().getFriendlyString()).orElse("dev"));
 		meta.addProperty("pilot", pending.session() != null ? "bridge" : "keyboard");
 		meta.addProperty("startedAt", java.time.Instant.now().toString());
-		meta.add("marker", blockPosJson(ready.marker()));
+		meta.add("marker", Json.pos(ready.marker()));
 		meta.add("arena", arena);
 		this.recorder.beginEpisode(kind.id, id, meta);
-		this.log.info("task.reset", DroneLog.fields("seed", pending.seed(), "marker", blockPosJson(ready.marker()), "recording", this.recorder.recording()));
+		this.log.info("task.reset", DroneLog.fields("seed", pending.seed(), "marker", Json.pos(ready.marker()), "recording", this.recorder.recording()));
 		this.broadcastStatus();
 
 		Session session = pending.session();
@@ -1219,7 +1223,7 @@ public final class ClientRuntime {
 		if (hit.getType() == HitResult.Type.BLOCK) {
 			JsonObject looking = new JsonObject();
 			looking.addProperty("block", BuiltInRegistries.BLOCK.getKey(this.mc.level.getBlockState(hit.getBlockPos()).getBlock()).toString());
-			looking.add("pos", blockPosJson(hit.getBlockPos()));
+			looking.add("pos", Json.pos(hit.getBlockPos()));
 			looking.addProperty("face", hit.getDirection().getName());
 			looking.addProperty("dist", hit.getLocation().distanceTo(eye));
 			json.add("lookingAt", looking);
@@ -1234,7 +1238,7 @@ public final class ClientRuntime {
 		camera.addProperty("windowAspect", (float) frame.width / frame.height);
 		camera.addProperty("eyeHeight", drone.getEyeHeight());
 		json.add("camera", camera);
-		json.add("marker", this.task.episodeId() == null ? JsonNull.INSTANCE : blockPosJson(this.task.marker()));
+		json.add("marker", this.task.episodeId() == null ? JsonNull.INSTANCE : Json.pos(this.task.marker()));
 		// privileged layout for scripted experts and the dashboard minimap, DroneEnv keeps it out of the policy's observation
 		json.add("arena", this.task.episodeId() == null ? JsonNull.INSTANCE : this.task.arena());
 		// the job (boxes and schematic name) is the drone's instruction, so policies may read it too
@@ -1301,14 +1305,6 @@ public final class ClientRuntime {
 		a.add(v.x);
 		a.add(v.y);
 		a.add(v.z);
-		return a;
-	}
-
-	private static JsonArray blockPosJson(BlockPos p) {
-		JsonArray a = new JsonArray();
-		a.add(p.getX());
-		a.add(p.getY());
-		a.add(p.getZ());
 		return a;
 	}
 }

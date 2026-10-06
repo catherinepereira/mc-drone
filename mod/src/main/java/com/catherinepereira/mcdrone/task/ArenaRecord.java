@@ -1,5 +1,6 @@
 package com.catherinepereira.mcdrone.task;
 
+import com.catherinepereira.mcdrone.Json;
 import com.catherinepereira.mcdrone.entity.DroneEntity;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
@@ -40,6 +41,8 @@ public final class ArenaRecord {
 	public @Nullable BlockPos referenceBase;
 	public @Nullable BlockPos buildBase;
 	public @Nullable DroneJob job;
+	// the job's boxes as schematic files by box name, set in scan perception
+	public @Nullable JsonObject scan;
 	// overrides the geofence the client derives from origin and radius, as x0, y0, z0, x1, y1, z1
 	public int @Nullable [] fence;
 
@@ -87,7 +90,7 @@ public final class ArenaRecord {
 					drone.inventory.countItem(Items.COAL)
 				};
 			}
-			case REPLICATE_BUILD, COPY_REGION, BUILD_SCHEMATIC, MINE_REGION, HARVEST_CROPS, HARVEST_REGION -> this.job.score(level);
+			case REPLICATE_BUILD, COPY_REGION, BUILD_SCHEMATIC, MINE_REGION, HARVEST_CROPS, HARVEST_REGION, COPY_BUILD, SCHEMATIC_BUILD, MINE_DEPOSIT, GATHER_BUILD -> this.job.score(level);
 		};
 	}
 
@@ -98,14 +101,14 @@ public final class ArenaRecord {
 	public JsonObject toJson() {
 		JsonObject json = new JsonObject();
 		json.addProperty("task", this.kind.id);
-		json.add("origin", pos(this.origin));
+		json.add("origin", Json.pos(this.origin));
 		json.addProperty("radius", this.radius);
 		json.add("obstacles", rows(this.obstacles));
 		json.addProperty("terrain", this.terrain);
 		json.add("trees", rows(this.trees));
 		json.add("stalactites", rows(this.stalactites));
 		if (this.marker != null) {
-			json.add("marker", pos(this.marker));
+			json.add("marker", Json.pos(this.marker));
 		}
 		if (!this.targets.isEmpty()) {
 			json.add("targets", positions(this.targets));
@@ -113,14 +116,14 @@ public final class ArenaRecord {
 			json.addProperty("targetBlock", "minecraft:coal_ore");
 		}
 		if (this.goal != null) {
-			json.add("goal", pos(this.goal));
+			json.add("goal", Json.pos(this.goal));
 			json.addProperty("goalBlock", BuiltInRegistries.BLOCK.getKey(this.goalBlock).toString());
 		}
 		if (this.sourceChest != null) {
-			json.add("sourceChest", pos(this.sourceChest));
+			json.add("sourceChest", Json.pos(this.sourceChest));
 		}
 		if (this.targetChest != null) {
-			json.add("targetChest", pos(this.targetChest));
+			json.add("targetChest", Json.pos(this.targetChest));
 		}
 		if (!this.required.isEmpty()) {
 			JsonObject req = new JsonObject();
@@ -128,7 +131,11 @@ public final class ArenaRecord {
 			json.add("required", req);
 		}
 		if (this.job != null) {
-			json.add("job", this.job.toJson());
+			JsonObject job = this.job.toJson();
+			if (this.scan != null) {
+				job.add("scan", this.scan);
+			}
+			json.add("job", job);
 		}
 		if (this.fence != null) {
 			JsonArray f = new JsonArray();
@@ -138,8 +145,8 @@ public final class ArenaRecord {
 			json.add("fence", f);
 		}
 		if (this.blueprint != null) {
-			json.add("referenceBase", pos(this.referenceBase));
-			json.add("buildBase", pos(this.buildBase));
+			json.add("referenceBase", Json.pos(this.referenceBase));
+			json.add("buildBase", Json.pos(this.buildBase));
 			json.add("blueprint", this.blueprint.toJson());
 		}
 		if (this.requiredCount > 0) {
@@ -161,17 +168,9 @@ public final class ArenaRecord {
 		return rows;
 	}
 
-	private static JsonArray pos(BlockPos p) {
-		JsonArray a = new JsonArray();
-		a.add(p.getX());
-		a.add(p.getY());
-		a.add(p.getZ());
-		return a;
-	}
-
 	private static JsonArray positions(List<BlockPos> list) {
 		JsonArray a = new JsonArray();
-		list.forEach(p -> a.add(pos(p)));
+		list.forEach(p -> a.add(Json.pos(p)));
 		return a;
 	}
 }

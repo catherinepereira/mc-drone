@@ -175,7 +175,7 @@ Step `n` pairs the frame captured before action `n` with action `n`. The last st
 
 ## Tasks
 
-`reset` options for every task: `task` (default the config's `task`), `terrain` (`flat`, `rough`, or `cave`), `radius` (arena half-width, default 12), `obstacles` (pillars, default 0), `targets` (dig_block 1, mine_and_deliver 3), `maxSteps`.
+`reset` options for every task: `task` (default the config's `task`), `terrain` (`flat`, `rough`, or `cave`), `radius` (arena half-width, default 12), `obstacles` (pillars, default 0), `targets` (dig_block 1, mine_and_deliver 3), `size` (structure or deposit side for the arenas below that build one, 3 to 16, default 5), `perception` (`vision` or `scan`, default the config's `perception`, see Perception), `maxSteps`.
 
 ### Arena
 
@@ -196,6 +196,10 @@ Every task subtracts `collisionPenalty` (config, default 0.05) on ticks the dron
 | chest_transfer | move every item from the stocked chest into the empty one | items in target, items required, required items carried | +10 per full set delivered, +2 per full set picked up | 600 |
 | mine_and_deliver | mine every coal ore and deposit the coal in the chest | remaining ore, coal delivered, coal required, coal carried | +3 per ore, +5 per full delivery | 900 |
 | replicate_build | copy the build on the cyan base onto the empty lime base, same blocks in the same places | matching cells, blueprint size, wrong blocks at the site | +10 per full copy built, -1 per wrong block | 900 |
+| copy_build | copy a `size`-wide structure on a cyan base onto a lime base | as copy jobs | as copy jobs | 20000 |
+| schematic_build | build a `size`-wide structure from a schematic file onto a lime base | as build jobs | as build jobs | 20000 |
+| mine_deposit | mine every coal ore in a `size`-wide stone deposit, most of it buried | as mining jobs | as mining jobs | 20000 |
+| gather_build | copy a structure, mining every block it needs from a stone deposit first, starting with an empty inventory | as copy jobs | as copy jobs | 20000 |
 
 ## Jobs
 
@@ -209,9 +213,16 @@ Jobs run in the player's own world: nothing is built or cleared, the drone keeps
 
 Boxes and points fall back to the player's selection, set with the drone remote or `select`. `dest` is where the target's lowest corner lands, and the copy keeps the source's orientation. Copy and build boxes are at most 16 blocks per side and mining regions 32, every box is within 96 blocks of the player, and only the singleplayer host can start jobs. During a job the server refuses drone breaks and places outside the job's box with a `break_failed` or `place_failed` event, so a copy only touches its destination and a mining job never digs out of its region.
 
-`state.job` is `{ "kind": "copy" | "build", "source": [x0, y0, z0, x1, y1, z1], "schematic": "house.schem", "dest": [x0, y0, z0, x1, y1, z1], "size": [w, h, l] }` with inclusive corners, `source` only for copies and `schematic` only for builds. A mining job's is `{ "kind": "mine", "region": [x0, y0, z0, x1, y1, z1], "block": "minecraft:coal_ore" }`. The drone gets the boxes, never the copy's contents: it reads those with its camera. The geofence covers the job's boxes and the drone's starting point plus 6 blocks around them.
+`state.job` is `{ "kind": "copy" | "build", "source": [x0, y0, z0, x1, y1, z1], "schematic": "house.schem", "dest": [x0, y0, z0, x1, y1, z1], "gather": [x0, y0, z0, x1, y1, z1], "size": [w, h, l] }` with inclusive corners, `source` only for copies, `schematic` only for builds, and `gather` only when the drone mines its materials there. A mining job's is `{ "kind": "mine", "region": [x0, y0, z0, x1, y1, z1], "block": "minecraft:coal_ore" }`. The drone gets the boxes, never the copy's contents: it reads those with its camera. The geofence covers the job's boxes and the drone's starting point plus 6 blocks around them.
 
 Copy and build metrics are matching destination cells, non-air target blocks, and destination blocks that don't belong. Each match is worth 10 divided by the target's block count, each wrong block costs 1, and success needs every target block in place with nothing extra. Mining metrics are the blocks of the kind left and how many there were, each one mined is worth 10 divided by the starting count, and success is none left. Block properties such as stair facing don't count yet. A job's default `maxSteps` is 100000.
+
+### Perception
+
+The config's `perception` picks how the drone learns what blocks a job involves.
+
+- `vision` (default): the drone gets the job's boxes and nothing else. It reads blocks with its camera, through a policy's own perception.
+- `scan`: when the job starts, the server reads each of the job's boxes straight from the world, the way WorldEdit copies, and writes them to `schematics/scans/<task>-<seed>-<box>.schem`. `state.job.scan` maps each box name (`source`, `dest`, `region`, `gather`) to its file, relative to the game's `schematics` folder. Every block is there, buried or not, as its full block state, such as `minecraft:wheat[age=7]`, including blocks a vision model doesn't know. The files are a snapshot of the job's start, the drone's own breaks and places are its to keep track of.
 
 ### Regions
 
@@ -243,3 +254,11 @@ Schematics are Sponge Schematic files (`.schem`), the format WorldEdit uses. The
 - The copy keeps the reference's orientation. Success needs every cell to match and nothing else above the site.
 - `arena` adds `referenceBase` and `buildBase` (center blocks) and `blueprint` (`[{ "offset": [dx, dy, dz], "block": "minecraft:bricks" }]`), all privileged.
 - `state.job` is a copy job from the 3x3x3 box above the cyan base to the one above the lime base, the same instruction a player's copy job gives.
+
+### copy_build, schematic_build, mine_deposit, gather_build
+
+- Structures are column heights over a `size` x `size` footprint, up to two thirds of `size` tall (at least 3), from 2 to 4 palette blocks. Every block has a face in the open: a column two or more tall always has an empty neighbor or the footprint edge beside it.
+- Each sits on a concrete base levelled to the highest ground under it, cyan for a copy source and lime for the site. The arena radius grows to fit, at least `2 * size + 8`.
+- copy_build and schematic_build stock the drone like replicate_build, without the decoys. schematic_build writes the structure to `schematics/arena-<seed>.schem` and gives a build job for it.
+- mine_deposit is a `size` x `size` stone box, `size / 2 + 1` deep (at least 3), on a stone base, with coal ore in about one cell in fifteen. About a third of the ore is on the surface, the rest buried.
+- gather_build adds a stone deposit holding every block the copy needs plus one spare of each, about a third of them on its surface. The copy job carries it as `gather`, the box the drone may also break in. The source structure stays out of the job's boxes, so the server refuses any break there. The drone starts with nothing.

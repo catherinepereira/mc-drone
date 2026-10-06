@@ -1,5 +1,6 @@
 package com.catherinepereira.mcdrone.task;
 
+import com.catherinepereira.mcdrone.Json;
 import com.google.gson.JsonObject;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -32,12 +33,9 @@ public final class MineJob implements DroneJob {
 		if (block == null || block.defaultBlockState().isAir()) {
 			throw new IllegalArgumentException("unknown block '" + blockName + "'");
 		}
-		BlockPos min = new BlockPos(Math.min(a.getX(), b.getX()), Math.min(a.getY(), b.getY()), Math.min(a.getZ(), b.getZ()));
-		BlockPos max = new BlockPos(Math.max(a.getX(), b.getX()), Math.max(a.getY(), b.getY()), Math.max(a.getZ(), b.getZ()));
-		BlockPos size = max.subtract(min).offset(1, 1, 1);
-		if (size.getX() > MAX_SIDE || size.getY() > MAX_SIDE || size.getZ() > MAX_SIDE) {
-			throw new IllegalArgumentException("mining region " + size.toShortString() + " is larger than " + MAX_SIDE + " per side");
-		}
+		BlockPos min = BlockPos.min(a, b);
+		BlockPos max = BlockPos.max(a, b);
+		DroneJob.checkSize(max.subtract(min).offset(1, 1, 1), MAX_SIDE, "mining region");
 		MineJob job = new MineJob(min, max, block, 0);
 		int count = job.remaining(level);
 		if (count == 0) {
@@ -74,7 +72,7 @@ public final class MineJob implements DroneJob {
 	public JsonObject toJson() {
 		JsonObject json = new JsonObject();
 		json.addProperty("kind", "mine");
-		json.add("region", DroneJob.box(this.min, this.max));
+		json.add("region", Json.box(this.min, this.max));
 		json.addProperty("block", BuiltInRegistries.BLOCK.getKey(this.block).toString());
 		return json;
 	}

@@ -20,9 +20,9 @@ import torch
 from mcdrone import DroneEnv
 from torch import nn
 
-from .model import DronePolicy, to_image
+from ..paths import CHECKPOINTS, REPORTS
+from ..policies.cnn import DronePolicy, to_image
 
-ROOT = Path(__file__).resolve().parents[2]
 
 
 class Critic(nn.Module):
@@ -50,8 +50,8 @@ def gae(rewards, values, dones, last_value, gamma: float, lam: float) -> tuple[n
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--init", type=Path, default=ROOT / "checkpoints" / "bc.pt")
-    parser.add_argument("--out", type=Path, default=ROOT / "checkpoints" / "ppo.pt")
+    parser.add_argument("--init", type=Path, default=CHECKPOINTS / "bc.pt")
+    parser.add_argument("--out", type=Path, default=CHECKPOINTS / "ppo.pt")
     parser.add_argument("--updates", type=int, default=20)
     parser.add_argument("--rollout", type=int, default=1024)
     parser.add_argument("--epochs", type=int, default=4)
@@ -83,9 +83,9 @@ def main() -> None:
 
     env = DroneEnv(hide_marker=True, streams=("rgb", "depth"), task_options={"obstacles": args.obstacles})
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    log_path = ROOT / "reports" / f"ppo-{stamp}.jsonl"
-    log_path.parent.mkdir(exist_ok=True)
-    args.out.parent.mkdir(exist_ok=True)
+    log_path = REPORTS / "ppo" / f"{stamp}.jsonl"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    args.out.parent.mkdir(parents=True, exist_ok=True)
 
     def tensors(obs):
         image = to_image(torch.from_numpy(obs["rgb"])[None].to(device), torch.from_numpy(obs["depth"])[None].to(device))

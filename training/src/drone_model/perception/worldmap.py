@@ -180,6 +180,9 @@ class WorldMap:
         for (x, y, z), n in zip(crossed, crossed_n):
             key = (int(x), int(y), int(z))
             self.air[key] = self.air.get(key, 0) + int(n)
+            # a ray through a remembered ceiling, such as one marked when a climb stalled against a wall, saw it isn't there
+            if self.ceilings.get((key[0], key[2])) == key[1]:
+                del self.ceilings[(key[0], key[2])]
         if self.strict:
             for name in self.strict:
                 votes = self.votes[name]

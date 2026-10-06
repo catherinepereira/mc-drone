@@ -128,6 +128,16 @@ export function ConfigView() {
             <option value="unlimited">Unlimited</option>
           </select>
         </Field>
+        <Field label="Block perception">
+          <select
+            className={inputClass}
+            value={String(value("perception") ?? "vision")}
+            onChange={(e) => set("perception", e.target.value)}
+          >
+            <option value="vision">Vision, read blocks with the camera</option>
+            <option value="scan">Scan, read job boxes from the world</option>
+          </select>
+        </Field>
         <Field label="Log level">
           <select
             className={inputClass}

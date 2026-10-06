@@ -11,7 +11,7 @@ import torch
 from mcdrone import list_episodes, state_vector
 from mcdrone.dataset import action_array
 
-from .model import DEPTH_MAX
+from ..policies.cnn import DEPTH_MAX
 
 
 @dataclass
@@ -55,7 +55,7 @@ def load_demos(data: Path, require_expert_labels: bool = True) -> Demos:
             actions.append(target)
             episodes.append(i)
     if not actions:
-        raise SystemExit(f"no usable demos in {data}, run python -m drone_model.collect first")
+        raise SystemExit(f"no usable demos in {data}, run python -m drone_model.collect.demos first")
     print(f"loaded {len(actions)} steps from {usable} episodes")
     return Demos(
         torch.from_numpy(np.stack(rgbs)),

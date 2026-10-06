@@ -4,7 +4,6 @@ import com.catherinepereira.mcdrone.McDrone;
 import com.catherinepereira.mcdrone.ModContent;
 import com.catherinepereira.mcdrone.RemoteInput;
 import com.catherinepereira.mcdrone.client.hud.DroneHud;
-import com.catherinepereira.mcdrone.client.hud.DroneScreen;
 import com.catherinepereira.mcdrone.net.DroneSyncPayload;
 import com.catherinepereira.mcdrone.net.RegionsPayload;
 import com.catherinepereira.mcdrone.net.TaskReadyPayload;

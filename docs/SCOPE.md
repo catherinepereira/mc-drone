@@ -120,7 +120,7 @@ Dashboard on `localhost:5318`, light theme in the sorty and united-stats style (
 
 - Behavior cloning on recorded `navigate_to` demos. Small CNN over RGB plus depth, predicting the action.
 - Evaluation: run the policy through `DroneEnv` in lockstep mode across fixed seeds and report success rate and mean steps.
-- PPO fine-tuning from the BC weights on the same env, results in training/README.md.
+- PPO fine-tuning from the BC weights on the same env, results in training/RESULTS.md.
 - Trains on the GPU with CUDA torch.
 
 ## Milestones

@@ -12,20 +12,20 @@ import numpy as np
 import torch
 from mcdrone import DroneEnv
 
-from .model import DronePolicy, to_image
-from .seq_model import SeqAgent
-from .reader import Reader
-from .skill import with_skill
-from .tool_experts import make_expert
+from ..paths import CHECKPOINTS, REPORTS
+from ..policies.cnn import DronePolicy, to_image
+from ..policies.seq import SeqAgent
+from ..perception.reader import Reader
+from ..policies.skill import with_skill
+from ..experts.tools import make_expert
 
-ROOT = Path(__file__).resolve().parents[2]
-# collect.py seeds start at 0, so eval seeds stay well clear of them
+# collect.demos seeds start at 0, so eval seeds stay well clear of them
 EVAL_SEED = 100_000
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--checkpoint", type=Path, default=ROOT / "checkpoints" / "bc.pt")
+    parser.add_argument("--checkpoint", type=Path, default=CHECKPOINTS / "bc.pt")
     parser.add_argument("--episodes", type=int, default=20)
     parser.add_argument(
         "--policy", choices=["bc", "seq", "expert", "random"], default="bc", help="bc runs any DronePolicy checkpoint, including PPO ones, seq a SeqToolPolicy"
@@ -35,7 +35,7 @@ def main() -> None:
     parser.add_argument("--task", default="navigate_to")
     parser.add_argument("--perception", choices=["reader", "mask"], default="reader", help="what experts see with, mask is the mod's ground truth")
     parser.add_argument("--skill", type=Path, default=None, help="a cell skill checkpoint to fly, aim, and fire for the expert's planner")
-    parser.add_argument("--reader", type=Path, default=Path(__file__).resolve().parents[2] / "checkpoints" / "reader.pt")
+    parser.add_argument("--reader", type=Path, default=CHECKPOINTS / "reader.pt")
     args = parser.parse_args()
     reader = Reader(args.reader) if args.perception == "reader" else None
 
@@ -109,8 +109,8 @@ def main() -> None:
         "results": results,
     }
     name = args.checkpoint.stem if args.policy in ("bc", "seq") else args.policy
-    out = ROOT / "reports" / f"eval-{args.task}-{name}-o{args.obstacles}-{args.terrain}-{datetime.now():%Y%m%d-%H%M%S}.json"
-    out.parent.mkdir(exist_ok=True)
+    out = REPORTS / "eval" / f"{args.task}-{name}-o{args.obstacles}-{args.terrain}-{datetime.now():%Y%m%d-%H%M%S}.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(summary, indent=2))
     print(f"{args.policy}: success rate {summary['success_rate']:.0%} over {len(results)} episodes, report {out}")
 

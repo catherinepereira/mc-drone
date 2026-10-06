@@ -15,9 +15,10 @@ import numpy as np
 import torch
 from mcdrone import DroneEnv
 
-from .seq_model import SeqAgent, prev_features
-from .tool_experts import make_expert
-from .train_seq import DAGGER_MARK, DATA, ROOT, fit, load_task
+from ..paths import CHECKPOINTS, DATA
+from ..policies.seq import SeqAgent, prev_features
+from ..experts.tools import make_expert
+from .seq import DAGGER_MARK, fit, load_task
 
 
 def collect_round(env: DroneEnv, task: str, checkpoint: Path, episodes: int, seed: int, beta: float, data: Path, rng: np.random.Generator) -> float:
@@ -63,7 +64,7 @@ def main() -> None:
     parser.add_argument("--data", type=Path, default=DATA)
     args = parser.parse_args()
 
-    checkpoint = args.init or ROOT / "checkpoints" / f"{args.task}-seq.pt"
+    checkpoint = args.init or CHECKPOINTS / f"{args.task}-seq.pt"
     rng = np.random.default_rng(args.seed)
     for r in range(args.first_round - 1, args.rounds):
         beta = args.beta / (2**r)
@@ -73,7 +74,7 @@ def main() -> None:
         finally:
             env.close()
         print(f"round {r + 1}: beta {beta:.2f}, success while collecting {rate:.0%}", flush=True)
-        out = ROOT / "checkpoints" / f"{args.task}-dagger{r + 1}.pt"
+        out = CHECKPOINTS / f"{args.task}-dagger{r + 1}.pt"
         run = fit(load_task(args.data, args.task), out, args.task, args.epochs, args.lr, init=checkpoint, seed=r)
         out.with_suffix(".json").write_text(json.dumps({"round": r + 1, "beta": beta, "collect_success": rate, **run}, indent=2))
         checkpoint = out

@@ -14,15 +14,14 @@ import torch
 from mcdrone import DroneEnv
 from PIL import Image, ImageDraw, ImageFont
 
-from .model import DronePolicy, to_image
-from .seq_model import SeqAgent
-from .reader import Reader
-from .skill import with_skill
-from .jobs import make_planner
-from .tool_experts import make_expert
+from ..paths import CHECKPOINTS, SCHEMATICS, VIDEOS
+from ..policies.cnn import DronePolicy, to_image
+from ..policies.seq import SeqAgent
+from ..perception.reader import Reader
+from ..policies.skill import with_skill
+from ..experts.jobs import make_planner
+from ..experts.tools import make_expert
 
-ROOT = Path(__file__).resolve().parents[2]
-VIDEOS = ROOT.parents[1] / "claudevids"
 CAM_W, CAM_H = 480, 360
 AGENT_W, AGENT_H = 160, 120
 SIDE_W, SIDE_H = 240, 180
@@ -100,7 +99,7 @@ def compose(obs: dict, info: dict, title: str, font) -> np.ndarray:
     state = info["state"]
     episode = info["episode"] or {}
     canvas = Image.new("RGB", (CAM_W + SIDE_W, CAM_H + STRIP_H), BG)
-    canvas.paste(Image.fromarray(obs["rgb"]), (0, 0))
+    canvas.paste(Image.fromarray(obs["rgb"]).resize((CAM_W, CAM_H), Image.BICUBIC), (0, 0))
     canvas.paste(Image.fromarray(depth_colors(obs["depth"])).resize((SIDE_W, SIDE_H)), (CAM_W, 0))
     if "mask" in obs:
         canvas.paste(Image.fromarray(mask_colors(obs["mask"])).resize((SIDE_W, SIDE_H), Image.NEAREST), (CAM_W, SIDE_H))
@@ -123,25 +122,19 @@ def compose(obs: dict, info: dict, title: str, font) -> np.ndarray:
     return np.asarray(canvas)
 
 
-def agent_view(obs: dict) -> dict:
-    """The frames at the 160x120 the reader and skill were trained on, the video keeps the full size"""
-    k = CAM_W // AGENT_W
-    rgb = obs["rgb"].reshape(AGENT_H, k, AGENT_W, k, 3).mean(axis=(1, 3)).astype(np.uint8)
-    return {**obs, "rgb": rgb, "depth": obs["depth"][::k, ::k], "mask": obs["mask"][::k, ::k]}
-
-
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--task", default="navigate_to")
     parser.add_argument("--perception", choices=["reader", "mask"], default="reader", help="what experts see with, mask is the mod's ground truth")
     parser.add_argument("--skill", type=Path, default=None, help="a cell skill checkpoint to fly, aim, and fire for the expert's planner")
-    parser.add_argument("--reader", type=Path, default=Path(__file__).resolve().parents[2] / "checkpoints" / "reader.pt")
+    parser.add_argument("--reader", type=Path, default=CHECKPOINTS / "reader.pt")
     parser.add_argument("--policy", choices=["expert", "bc", "seq"], default="expert")
-    parser.add_argument("--checkpoint", type=Path, default=ROOT / "checkpoints" / "ppo.pt")
+    parser.add_argument("--checkpoint", type=Path, default=CHECKPOINTS / "ppo.pt")
     parser.add_argument("--episodes", type=int, default=3)
     parser.add_argument("--seed", type=int, default=300_000)
     parser.add_argument("--obstacles", type=int, default=8)
     parser.add_argument("--terrain", choices=["flat", "rough", "cave"], default="flat")
+    parser.add_argument("--size", type=int, default=5, help="structure or deposit side for the copy, build, and mine arenas")
     parser.add_argument("--name", default=None)
     parser.add_argument("--out", type=Path, default=VIDEOS)
     args = parser.parse_args()
@@ -156,10 +149,12 @@ def main() -> None:
     env = DroneEnv(
         task=args.task,
         tools=args.policy in ("expert", "seq") or None,
-        width=CAM_W,
-        height=CAM_H,
+        # the frames the reader and skill were trained on, upscaled for the video
+        width=AGENT_W,
+        height=AGENT_H,
         streams=("rgb", "depth", "mask"),
-        task_options={"obstacles": args.obstacles, "terrain": args.terrain},
+        task_options={"obstacles": args.obstacles, "terrain": args.terrain, "size": args.size},
+        action_pause_ms=0,
     )
     args.out.mkdir(parents=True, exist_ok=True)
     name = args.name or f"{args.task}-{args.policy if args.policy == 'expert' else args.checkpoint.stem}-o{args.obstacles}-{args.terrain}"
@@ -180,7 +175,7 @@ def main() -> None:
             job = info["state"].get("job")
             if args.policy == "expert":
                 # tasks with a job run the brain's planner for it, like drone_model.brain
-                planner = make_planner(job, env.client.mask_ids, reader) if job and reader is not None else make_expert(args.task, env.client.mask_ids, reader=reader)
+                planner = make_planner(job, env.client.mask_ids, reader, SCHEMATICS) if job and reader is not None else make_expert(args.task, env.client.mask_ids, reader=reader)
                 expert = with_skill(planner, args.skill)
             if args.policy == "seq":
                 expert = SeqAgent(args.checkpoint, env.client.mask_ids, device)
@@ -188,6 +183,8 @@ def main() -> None:
                 label = f"{args.checkpoint.stem} policy, vision only"
             elif args.skill is not None:
                 label = "planner plus learned cell skill, block reader vision"
+            elif job:
+                label = "job planner, scripted flight, block reader vision"
             else:
                 label = "scripted expert, explores and maps"
             title = f"{args.task}, {label}, episode {i + 1}"
@@ -197,7 +194,7 @@ def main() -> None:
                 if terminated or truncated:
                     break
                 if args.policy in ("expert", "seq"):
-                    action = expert.act(info["state"], agent_view(obs))
+                    action = expert.act(info["state"], obs)
                 else:
                     with torch.no_grad():
                         rgb = torch.from_numpy(np.asarray(Image.fromarray(obs["rgb"]).resize((160, 120), Image.BILINEAR)))[None].to(device)

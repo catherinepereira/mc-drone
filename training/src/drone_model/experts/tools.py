@@ -1,6 +1,6 @@
 """
 Scripted experts for every task, used to generate demos and as a reference in evaluation.
-They know only the drone's own pose and what its camera has shown (see perception.WorldMap):
+They know only the drone's own pose and what its camera has shown (see perception.worldmap.WorldMap):
 they explore until the thing they need comes into view, then remember where it was
 """
 
@@ -10,10 +10,10 @@ import math
 
 import numpy as np
 
-from .expert import waypoint
-from .blocks import BUILD_PALETTE
-from .perception import WorldMap, perceivable
-from .reader import CLASSES, SKY, mask_lut
+from .navigate import waypoint
+from ..perception.blocks import BUILD_PALETTE
+from ..perception.worldmap import WorldMap, perceivable
+from ..perception.reader import CLASSES, SKY, mask_lut
 
 TOOLS = ("none", "break", "place", "open", "close")
 REACH = 4.4
@@ -93,7 +93,7 @@ class HonestExpert:
 
     def __init__(self, mask_ids: dict, depth_max: float = 64.0, reader=None) -> None:
         """
-        With a reader (a drone_model.reader.Reader) the expert sees only what the block reader makes of the camera
+        With a reader (a drone_model.perception.reader.Reader) the expert sees only what the block reader makes of the camera
         image and depth, without one it reads the mod's mask stream, which is ground truth
         """
         self.map = WorldMap(mask_ids)
@@ -102,9 +102,9 @@ class HonestExpert:
         # what the planner wants this step, {"mode": "view" | "break" | "place", "aim": point, "via": point or None},
         # recorded as the goal for training the cell skill
         self.intent: dict | None = None
-        # a learned controller (drone_model.skill.SkillAgent) that flies, aims, and fires in place of the scripted one
+        # a learned controller (drone_model.policies.skill.SkillAgent) that flies, aims, and fires in place of the scripted one
         self.skill = None
-        # a drone_model.memory.VoxelMemory the reader's output goes into, and the cells that changed this step
+        # a drone_model.perception.memory.VoxelMemory the reader's output goes into, and the cells that changed this step
         self.memory = None
         self.changes: list = []
         self.reader_lut = mask_lut(mask_ids) if reader is not None else None
@@ -114,7 +114,6 @@ class HonestExpert:
         self.home: tuple[float, float] | None = None
         self.visited: list[tuple[float, float]] = []
         self.search_goal: tuple[float, float] | None = None
-        self.searched_all = False
         # blocks the expert gave up on, and how long it has worked on the current one
         self.unreachable: set[tuple] = set()
         self.working_on: tuple | None = None
@@ -212,7 +211,6 @@ class HonestExpert:
             points = self.search_points()
             if not points:
                 # everything searched once, start over, something may have been hidden from every vantage
-                self.searched_all = True
                 self.visited.clear()
                 points = self.search_points()
             self.search_goal = min(points, key=lambda p: math.dist(p, here)) if points else self.home
@@ -276,6 +274,16 @@ class HonestExpert:
             return self.skill.act(state, self.obs, self.intent)
         return tool_action(move)
 
+    def dwell_on(self, state: dict, look) -> None:
+        """Counts frames aimed at look, then moves on to the next of self.views after SURVEY_DWELL of them"""
+        yaw_error, pitch_error, _ = aim_errors(state, look)
+        if abs(yaw_error) < AIM_TOLERANCE and abs(pitch_error) < AIM_TOLERANCE or self.view_steps > SURVEY_LIMIT + 20:
+            self.dwell += 1
+        if self.dwell >= SURVEY_DWELL:
+            self.views.pop(0)
+            self.view_steps = 0
+            self.dwell = 0
+
     def work_on(
         self, state: dict, block, tool: str, standoff: float, hover: float, slot: int = 0, point=None, expect: str | None = None, face: str | None = None,
         place: str | None = None, via=None,
@@ -328,7 +336,9 @@ class HonestExpert:
             if self.absent_steps >= 3:
                 self.unreachable.add(block)
                 self.map.forget(block)
-        return tool_action(move, tool if arrived and on_target else "none", slot=slot, block=place)
+        # with a viewpoint the drone can be on target before it settles there, in a tight trench it may never settle
+        fire = on_target and (arrived or via is not None)
+        return tool_action(move, tool if fire else "none", slot=slot, block=place)
 
     def known(self, name: str) -> list[tuple]:
         return [c for c in self.map.landmarks(name) if c not in self.unreachable]
@@ -402,13 +412,8 @@ class ChestTransferExpert(HonestExpert, ContainerMixin):
             return tool_action([0, 0, 0, 0, 0], "close")
         chests = self.known("chest")
         target = next((c for c in chests if self.roles.get(c) == "target"), None)
-        if carried(state):
-            if target is not None:
-                return self.deliver(state, target, None)
-            unknown = self.nearest(state, [c for c in chests if c not in self.roles])
-            if unknown is not None:
-                return self.work_on(state, unknown, "open", standoff=2.0, hover=0.8, expect="minecraft:chest")
-            return self.explore(state)
+        if carried(state) and target is not None:
+            return self.deliver(state, target, None)
         unknown = self.nearest(state, [c for c in chests if c not in self.roles])
         if unknown is not None:
             return self.work_on(state, unknown, "open", standoff=2.0, hover=0.8, expect="minecraft:chest")
@@ -568,12 +573,7 @@ class BuildExpert(HonestExpert):
             yaw_error, pitch_error, _ = aim_errors(state, look)
             up = float(np.clip(view[1] - state["pos"][1], -1, 1))
             move = [0.0, 0.0, up, np.clip(yaw_error * TURN_GAIN, -1, 1), np.clip(pitch_error * TURN_GAIN, -1, 1)]
-            if abs(yaw_error) < AIM_TOLERANCE and abs(pitch_error) < AIM_TOLERANCE or self.view_steps > SURVEY_LIMIT + 20:
-                self.dwell += 1
-            if self.dwell >= SURVEY_DWELL:
-                self.views.pop(0)
-                self.view_steps = 0
-                self.dwell = 0
+            self.dwell_on(state, look)
         return self.view(state, move, view, look)
 
     def slot_of(self, state: dict, block: str) -> int | None:
@@ -798,12 +798,7 @@ class HarvestExpert(HonestExpert):
         if math.dist((view[0], view[2]), (state["pos"][0], state["pos"][2])) < 0.8 or self.view_steps > SURVEY_LIMIT:
             yaw_error, pitch_error, _ = aim_errors(state, (cx, y0 + 1, cz))
             move = [0.0, 0.0, float(np.clip(view[1] - state["pos"][1], -1, 1)), np.clip(yaw_error * TURN_GAIN, -1, 1), np.clip(pitch_error * TURN_GAIN, -1, 1)]
-            if abs(yaw_error) < AIM_TOLERANCE and abs(pitch_error) < AIM_TOLERANCE or self.view_steps > SURVEY_LIMIT + 20:
-                self.dwell += 1
-            if self.dwell >= SURVEY_DWELL:
-                self.views.pop(0)
-                self.view_steps = 0
-                self.dwell = 0
+            self.dwell_on(state, (cx, y0 + 1, cz))
         return self.view(state, move, view, (cx, y0 + 1, cz))
 
 

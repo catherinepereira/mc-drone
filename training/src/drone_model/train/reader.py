@@ -15,10 +15,9 @@ import torch
 from mcdrone import list_episodes
 from torch.nn import functional as F
 
-from .reader import CLASSES, NOT_CROP, BlockReader, state_tables
+from ..paths import CHECKPOINTS, DATA
+from ..perception.reader import CLASSES, NOT_CROP, BlockReader, state_tables
 
-ROOT = Path(__file__).resolve().parents[2]
-DATA = ROOT / "data"
 CACHE = "reader-frames"
 FIELDS = ("rgb", "depth", "cls", "ripe")
 # neighboring frames are nearly identical, keep every STRIDE-th
@@ -125,7 +124,7 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=24)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--eval-every", type=int, default=1000)
-    parser.add_argument("--out", type=Path, default=ROOT / "checkpoints" / "reader.pt")
+    parser.add_argument("--out", type=Path, default=CHECKPOINTS / "reader.pt")
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 

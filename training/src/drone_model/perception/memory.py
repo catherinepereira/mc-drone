@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from .perception import backproject
+from .worldmap import backproject
 from .reader import CLASSES, OTHER, SKY
 
 AIR = "minecraft:air"
@@ -18,11 +18,14 @@ AIR = "minecraft:air"
 MIN_VOTES = 4
 # votes a cell keeps when its block is broken, so later frames win quickly
 FORGET = 0
+# a hit counts fully up to this many blocks away and less beyond, far views at grazing angles misread more
+NEAR = 5.0
+FAR_WEIGHT = 0.25
 
 
 @dataclass
 class Cell:
-    votes: np.ndarray = field(default_factory=lambda: np.zeros(len(CLASSES), dtype=np.int32))
+    votes: np.ndarray = field(default_factory=lambda: np.zeros(len(CLASSES), dtype=np.float32))
     ripe: int = 0
     unripe: int = 0
     seen: int = -1
@@ -71,8 +74,10 @@ class VoxelMemory:
         view = backproject(state, depth, depth_max, valid=classes != SKY)
         cls = classes[np.ix_(view.rows, view.cols)][view.hit]
         rp = ripe[np.ix_(view.rows, view.cols)][view.hit]
+        dist = depth[np.ix_(view.rows, view.cols)][view.hit]
         keep = view.interior
         inside, cls, rp = view.inside[keep], cls[keep], rp[keep]
+        weight = np.clip(NEAR / np.maximum(dist[keep], NEAR), FAR_WEIGHT, 1.0)
         # a short block (a young crop) can hold both ends of the step, it was hit, not crossed
         crossed = view.outside[keep][np.any(view.outside[keep] != inside, axis=1)]
         touched = {tuple(int(v) for v in c) for c in np.unique(inside, axis=0)}
@@ -85,10 +90,10 @@ class VoxelMemory:
             if key in cleared:
                 self.cells[key].votes[SKY] += int(n)
         crop_ids = [CLASSES.index(c) for c in ("minecraft:wheat", "minecraft:carrots", "minecraft:potatoes", "minecraft:beetroots")]
-        for (x, y, z), c, r in zip(inside, cls, rp):
+        for (x, y, z), c, r, w in zip(inside, cls, rp, weight):
             key = (int(x), int(y), int(z))
             cell = self.cells.setdefault(key, Cell())
-            cell.votes[c] += 1
+            cell.votes[c] += w
             cell.seen = self.step
             if c in crop_ids:
                 if r > 0.5:

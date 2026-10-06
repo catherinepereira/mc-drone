@@ -1,5 +1,6 @@
 package com.catherinepereira.mcdrone.task;
 
+import com.catherinepereira.mcdrone.Json;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import net.minecraft.core.BlockPos;
@@ -30,14 +31,13 @@ public record Region(String id, String name, Purpose purpose, BlockPos min, Bloc
 	}
 
 	public static Region of(String id, String name, Purpose purpose, BlockPos a, BlockPos b) {
-		BlockPos min = new BlockPos(Math.min(a.getX(), b.getX()), Math.min(a.getY(), b.getY()), Math.min(a.getZ(), b.getZ()));
-		BlockPos max = new BlockPos(Math.max(a.getX(), b.getX()), Math.max(a.getY(), b.getY()), Math.max(a.getZ(), b.getZ()));
+		BlockPos min = BlockPos.min(a, b);
+		BlockPos max = BlockPos.max(a, b);
 		return new Region(id, name, purpose, min, max);
 	}
 
 	public boolean contains(BlockPos p) {
-		return p.getX() >= this.min.getX() && p.getX() <= this.max.getX() && p.getY() >= this.min.getY() && p.getY() <= this.max.getY()
-			&& p.getZ() >= this.min.getZ() && p.getZ() <= this.max.getZ();
+		return DroneJob.inside(p, this.min, this.max);
 	}
 
 	public JsonObject toJson() {
@@ -45,11 +45,7 @@ public record Region(String id, String name, Purpose purpose, BlockPos min, Bloc
 		json.addProperty("id", this.id);
 		json.addProperty("name", this.name);
 		json.addProperty("purpose", this.purpose.id());
-		JsonArray box = new JsonArray();
-		for (int v : new int[] {this.min.getX(), this.min.getY(), this.min.getZ(), this.max.getX(), this.max.getY(), this.max.getZ()}) {
-			box.add(v);
-		}
-		json.add("box", box);
+		json.add("box", Json.box(this.min, this.max));
 		return json;
 	}
 

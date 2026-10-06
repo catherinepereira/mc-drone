@@ -18,13 +18,12 @@ from mcdrone.dataset import action_array
 from torch import nn
 from torch.nn import functional as F
 
-from .seq_model import (
+from ..paths import CHECKPOINTS, DATA
+from ..policies.seq import (
     HEIGHT, MOVE_DIM, WIDTH, SeqToolPolicy, frame_features, inventory_features, mask_lookup, prev_features, state_features,
 )
-from .tool_experts import TOOLS
+from ..experts.tools import TOOLS
 
-ROOT = Path(__file__).resolve().parents[2]
-DATA = ROOT / "data"
 CACHE = f"seq-{WIDTH}x{HEIGHT}"
 # DAgger episodes carry this file, they count even when the policy flying them failed
 DAGGER_MARK = "dagger"
@@ -100,7 +99,7 @@ def load_task(data: Path, task: str) -> list[Sequence]:
         if (i + 1) % 25 == 0:
             print(f"loaded {i + 1}/{len(episodes)} episodes", flush=True)
     if not out:
-        raise SystemExit(f"no labeled {task} demos in {data}, run python -m drone_model.collect --task {task} first")
+        raise SystemExit(f"no labeled {task} demos in {data}, run python -m drone_model.collect.demos --task {task} first")
     print(f"{len(out)} episodes, {sum(len(s) for s in out)} steps")
     return out
 
@@ -222,7 +221,7 @@ def main() -> None:
     parser.add_argument("--out", type=Path, default=None)
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
-    out_path = args.out or ROOT / "checkpoints" / f"{args.task}-seq.pt"
+    out_path = args.out or CHECKPOINTS / f"{args.task}-seq.pt"
 
     seqs = load_task(args.data, args.task)
     run = fit(seqs, out_path, args.task, args.epochs, args.lr, args.batch_size, args.val_fraction, args.init, args.seed)

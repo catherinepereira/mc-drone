@@ -12,7 +12,7 @@ import numpy as np
 import torch
 from torch import nn
 
-from .seq_model import DEPTH_MAX, frame_features, state_features
+from .seq import DEPTH_MAX, conv, frame_features, state_features
 
 MODES = ("view", "break", "place")
 GOAL_DIM = 10
@@ -57,10 +57,6 @@ def aim_features(depth: torch.Tensor, state: torch.Tensor, goal: torch.Tensor) -
     return torch.stack([yaw_error / span, pitch_error / span, dist / 4.0, ((crosshair - dist) / 2.0).clamp(-2, 2), (dist <= 4.4).float()], dim=1)
 
 
-def conv(cin: int, cout: int, k: int, s: int) -> nn.Sequential:
-    return nn.Sequential(nn.Conv2d(cin, cout, k, s, k // 2), nn.GroupNorm(8, cout), nn.ReLU(inplace=True))
-
-
 class SkillPolicy(nn.Module):
     def __init__(self) -> None:
         super().__init__()
@@ -101,7 +97,7 @@ class SkillAgent:
 
     @torch.no_grad()
     def act(self, state: dict, obs: dict, intent: dict) -> dict:
-        from .tool_experts import tool_action
+        from ..experts.tools import tool_action
 
         rgb, depth = frame(obs)
         tensors = [

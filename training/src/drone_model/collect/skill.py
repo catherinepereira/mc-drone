@@ -15,14 +15,14 @@ from pathlib import Path
 import numpy as np
 from mcdrone import DroneEnv
 
-from .jobs import make_planner
-from .reader import Reader
-from .seq_model import state_features
-from .skill import SkillAgent, frame, goal_features
-from .tool_experts import TOOLS, make_expert
+from ..paths import CHECKPOINTS, DATA
+from ..experts.jobs import make_planner
+from ..perception.reader import Reader
+from ..policies.seq import state_features
+from ..policies.skill import SkillAgent, frame, goal_features
+from ..experts.tools import TOOLS, make_expert
 
-ROOT = Path(__file__).resolve().parents[2]
-OUT = ROOT / "data" / "skill"
+OUT = DATA / "skill"
 
 
 def main() -> None:
@@ -34,7 +34,8 @@ def main() -> None:
     parser.add_argument("--noise", type=float, default=0.2)
     parser.add_argument("--obstacles", type=int, default=4)
     parser.add_argument("--max-steps", type=int, default=1200)
-    parser.add_argument("--reader", type=Path, default=ROOT / "checkpoints" / "reader.pt")
+    parser.add_argument("--size", type=int, default=5, help="structure or deposit side for the copy, build, and mine arenas")
+    parser.add_argument("--reader", type=Path, default=CHECKPOINTS / "reader.pt")
     parser.add_argument("--skill", type=Path, default=None, help="a trained skill that flies a share of the goal steps")
     parser.add_argument("--beta", type=float, default=0.5, help="share of goal steps the skill flies")
     parser.add_argument("--name", default=None, help="data folder name, task-terrain by default")
@@ -47,7 +48,7 @@ def main() -> None:
     out.mkdir(parents=True, exist_ok=True)
     env = DroneEnv(
         task=args.task, tools=True, streams=("rgb", "depth"), action_pause_ms=0,
-        task_options={"obstacles": args.obstacles, "terrain": args.terrain, "maxSteps": args.max_steps},
+        task_options={"obstacles": args.obstacles, "terrain": args.terrain, "maxSteps": args.max_steps, "size": args.size},
     )
     try:
         for i in range(args.episodes):

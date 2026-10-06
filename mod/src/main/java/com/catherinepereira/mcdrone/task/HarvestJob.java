@@ -1,5 +1,6 @@
 package com.catherinepereira.mcdrone.task;
 
+import com.catherinepereira.mcdrone.Json;
 import com.google.gson.JsonObject;
 import java.util.ArrayList;
 import java.util.List;
@@ -40,12 +41,9 @@ public final class HarvestJob implements DroneJob {
 		if (!(block instanceof CropBlock crop)) {
 			throw new IllegalArgumentException("'" + cropName + "' is not a crop, try minecraft:wheat, carrots, potatoes, or beetroots");
 		}
-		BlockPos min = new BlockPos(Math.min(a.getX(), b.getX()), Math.min(a.getY(), b.getY()), Math.min(a.getZ(), b.getZ()));
-		BlockPos max = new BlockPos(Math.max(a.getX(), b.getX()), Math.max(a.getY(), b.getY()), Math.max(a.getZ(), b.getZ()));
-		BlockPos size = max.subtract(min).offset(1, 1, 1);
-		if (size.getX() > MAX_SIDE || size.getY() > MAX_SIDE || size.getZ() > MAX_SIDE) {
-			throw new IllegalArgumentException("farm region " + size.toShortString() + " is larger than " + MAX_SIDE + " per side");
-		}
+		BlockPos min = BlockPos.min(a, b);
+		BlockPos max = BlockPos.max(a, b);
+		DroneJob.checkSize(max.subtract(min).offset(1, 1, 1), MAX_SIDE, "farm region");
 		List<BlockPos> ripe = new ArrayList<>();
 		List<BlockPos> plots = new ArrayList<>();
 		// a box drawn on the crops or on the farmland both count, so look one block past the top
@@ -97,7 +95,7 @@ public final class HarvestJob implements DroneJob {
 	public JsonObject toJson() {
 		JsonObject json = new JsonObject();
 		json.addProperty("kind", "harvest");
-		json.add("region", DroneJob.box(this.min, this.max));
+		json.add("region", Json.box(this.min, this.max));
 		json.addProperty("crop", BuiltInRegistries.BLOCK.getKey(this.crop).toString());
 		json.addProperty("seed", BuiltInRegistries.ITEM.getKey(this.crop.asItem()).toString());
 		return json;

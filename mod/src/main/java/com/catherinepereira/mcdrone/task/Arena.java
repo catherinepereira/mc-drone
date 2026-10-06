@@ -6,8 +6,10 @@ import com.catherinepereira.mcdrone.entity.DroneItem;
 import com.catherinepereira.mcdrone.net.ResetTaskPayload;
 import com.catherinepereira.mcdrone.net.TaskReadyPayload;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
@@ -67,7 +69,10 @@ public final class Arena {
 		if (kind.isJob()) {
 			return startJob(player, req, kind);
 		}
-		int radius = Math.clamp(req.radius(), 4, 48);
+		int size = Math.clamp(req.size(), 3, BuildJob.MAX_SIZE);
+		boolean structure = kind == TaskKind.COPY_BUILD || kind == TaskKind.SCHEMATIC_BUILD || kind == TaskKind.MINE_DEPOSIT || kind == TaskKind.GATHER_BUILD;
+		// two or three sites of size blocks across have to fit side by side
+		int radius = Math.clamp(structure ? Math.max(req.radius(), 2 * size + 8) : req.radius(), 4, 48);
 		int ox = req.hasOrigin() ? req.originX() : player.getBlockX();
 		int oz = req.hasOrigin() ? req.originZ() : player.getBlockZ();
 		int floorY = findFloor(level, ox, oz);
@@ -83,6 +88,7 @@ public final class Arena {
 		record.terrain = terrain.kind;
 		List<Vec3> keyPoints = new ArrayList<>();
 		int targets = Math.clamp(req.targets(), 1, 8);
+		List<ItemStack> stock = null;
 
 		switch (kind) {
 			case NAVIGATE_TO -> {
@@ -128,6 +134,47 @@ public final class Arena {
 			case HARVEST_CROPS -> {
 				BlockPos[] plot = buildFarm(level, rng, record, keyPoints, terrain);
 				record.job = HarvestJob.start(level, plot[0], plot[1], "minecraft:wheat");
+			}
+			case COPY_BUILD, SCHEMATIC_BUILD, GATHER_BUILD -> {
+				int height = Math.max(3, size * 2 / 3);
+				Schematic target = Structures.random(rng, size, height, size);
+				BlockPos max = new BlockPos(size - 1, height - 1, size - 1);
+				BlockPos dest = site(level, rng, record, keyPoints, terrain, size, size, Blocks.CONCRETE.pick(DyeColor.LIME).defaultBlockState(), 0.0).above();
+				if (kind == TaskKind.SCHEMATIC_BUILD) {
+					String name = "arena-" + Long.toHexString(req.seed()) + ".schem";
+					try {
+						Files.createDirectories(SCHEMATICS);
+						target.write(SCHEMATICS.resolve(name));
+					} catch (IOException e) {
+						throw new IllegalStateException("could not write " + name, e);
+					}
+					record.job = BuildJob.build(target, name, dest);
+				} else {
+					BlockPos source = site(level, rng, record, keyPoints, terrain, size, size, Blocks.CONCRETE.pick(DyeColor.CYAN).defaultBlockState(), size + 4.0).above();
+					Structures.paste(level, target, source);
+					BuildJob job = BuildJob.copy(level, source, source.offset(max), dest);
+					if (kind == TaskKind.GATHER_BUILD) {
+						// the materials, each kind with one spare, set into a stone deposit about three times their volume
+						List<Block> materials = new ArrayList<>();
+						Structures.counts(target).forEach((block, n) -> materials.addAll(Collections.nCopies(n + 1, block)));
+						int side = Math.max(4, size);
+						int depth = Math.clamp((3 * materials.size() + side * side - 1) / (side * side), 2, 6);
+						BlockPos deposit = site(level, rng, record, keyPoints, terrain, side, side, Blocks.STONE.defaultBlockState(), size + 4.0).above();
+						Structures.deposit(level, rng, deposit, deposit.offset(side - 1, depth - 1, side - 1), materials);
+						job.gatherFrom(deposit, deposit.offset(side - 1, depth - 1, side - 1));
+					}
+					record.job = job;
+				}
+				if (kind != TaskKind.GATHER_BUILD) {
+					stock = Structures.stock(rng, target, 27);
+				}
+			}
+			case MINE_DEPOSIT -> {
+				int depth = Math.max(3, size / 2 + 1);
+				BlockPos min = site(level, rng, record, keyPoints, terrain, size, size, Blocks.STONE.defaultBlockState(), 0.0).above();
+				int ores = Math.max(3, size * size * depth / 15);
+				Structures.deposit(level, rng, min, min.offset(size - 1, depth - 1, size - 1), Collections.nCopies(ores, Blocks.COAL_ORE));
+				record.job = MineJob.start(level, min, min.offset(size - 1, depth - 1, size - 1), "minecraft:coal_ore");
 			}
 		}
 
@@ -178,12 +225,17 @@ public final class Arena {
 			drone.inventory.setItem(0, new ItemStack(Items.WHEAT_SEEDS, 4));
 		}
 		if (record.blueprint != null) {
-			List<ItemStack> stock = record.blueprint.stock(rng, drone.inventory.getContainerSize());
+			stock = record.blueprint.stock(rng, drone.inventory.getContainerSize());
+		}
+		if (stock != null) {
 			for (int i = 0; i < stock.size(); i++) {
 				drone.inventory.setItem(i, stock.get(i));
 			}
 		}
 
+		if (req.scan() && record.job != null) {
+			record.scan = Scans.write(level, record.job, kind.id + "-" + Long.toHexString(req.seed()));
+		}
 		RECORDS.put(player.getUUID(), record);
 		BlockPos primary = BlockPos.containing(keyPoints.getFirst());
 		return new TaskReadyPayload(
@@ -202,14 +254,9 @@ public final class Arena {
 		int baseY = 0;
 		for (int i = 0; i < 200; i++) {
 			BlockPos candidate = randomInside(rng, record.origin.getX(), record.origin.getZ(), record.radius - half - 2, 0);
-			int top = Integer.MIN_VALUE;
-			int roof = Integer.MAX_VALUE;
-			for (int dx = -half; dx <= half; dx++) {
-				for (int dz = -half; dz <= half; dz++) {
-					top = Math.max(top, terrain.ground(candidate.getX() + dx, candidate.getZ() + dz));
-					roof = Math.min(roof, terrain.ceiling(candidate.getX() + dx, candidate.getZ() + dz));
-				}
-			}
+			int[] span = groundAndCeiling(terrain, candidate.getX() - half, candidate.getZ() - half, 2 * half + 1, 2 * half + 1);
+			int top = span[0];
+			int roof = span[1];
 			center = candidate;
 			baseY = top;
 			if (roof - top >= 6) {
@@ -297,11 +344,14 @@ public final class Arena {
 		BlockPos lo = BlockPos.containing(start);
 		BlockPos hi = lo;
 		for (BlockPos c : corners) {
-			lo = new BlockPos(Math.min(lo.getX(), c.getX()), Math.min(lo.getY(), c.getY()), Math.min(lo.getZ(), c.getZ()));
-			hi = new BlockPos(Math.max(hi.getX(), c.getX()), Math.max(hi.getY(), c.getY()), Math.max(hi.getZ(), c.getZ()));
+			lo = BlockPos.min(lo, c);
+			hi = BlockPos.max(hi, c);
 		}
 		ArenaRecord record = new ArenaRecord(kind, corners[0], 0);
 		record.job = job;
+		if (req.scan()) {
+			record.scan = Scans.write(level, job, kind.id + "-" + Long.toHexString(req.seed()));
+		}
 		record.fence = new int[] {lo.getX() - JOB_MARGIN, lo.getY() - 2, lo.getZ() - JOB_MARGIN, hi.getX() + JOB_MARGIN + 1, hi.getY() + JOB_MARGIN + 1, hi.getZ() + JOB_MARGIN + 1};
 		RECORDS.put(player.getUUID(), record);
 		return new TaskReadyPayload(
@@ -334,6 +384,60 @@ public final class Arena {
 	}
 
 	/**
+	 * A width x length footprint inside the arena, at least minDistFromKeys from the key points so far, levelled to the
+	 * highest ground under it with a layer of base. Returns its min corner at base height
+	 */
+	private static BlockPos site(
+		ServerLevel level, Random rng, ArenaRecord record, List<Vec3> keyPoints, Terrain terrain, int width, int length, BlockState base, double minDistFromKeys
+	) {
+		int reach = record.radius - Math.max(width, length) - 2;
+		BlockPos min = null;
+		int baseY = 0;
+		for (int i = 0; i < 300; i++) {
+			BlockPos candidate = randomInside(rng, record.origin.getX(), record.origin.getZ(), Math.max(1, reach), 0);
+			Vec3 middle = new Vec3(candidate.getX() + width / 2.0, 0, candidate.getZ() + length / 2.0);
+			int top = groundAndCeiling(terrain, candidate.getX(), candidate.getZ(), width, length)[0];
+			// clear of every earlier key point by the given distance plus this footprint's own half width
+			double clearance = minDistFromKeys + Math.max(width, length) / 2.0;
+			boolean spaced = keyPoints.stream().allMatch(k -> horizontal(middle, k) >= Math.max(clearance, 4.0));
+			min = candidate;
+			baseY = top;
+			if (spaced) {
+				break;
+			}
+		}
+		pad(level, terrain, min.getX(), min.getZ(), width, length, baseY, base, keyPoints);
+		return new BlockPos(min.getX(), baseY, min.getZ());
+	}
+
+	/** The highest ground and the lowest ceiling under a footprint, from its min corner */
+	private static int[] groundAndCeiling(Terrain terrain, int x0, int z0, int width, int length) {
+		int top = Integer.MIN_VALUE;
+		int roof = Integer.MAX_VALUE;
+		for (int x = x0; x < x0 + width; x++) {
+			for (int z = z0; z < z0 + length; z++) {
+				top = Math.max(top, terrain.ground(x, z));
+				roof = Math.min(roof, terrain.ceiling(x, z));
+			}
+		}
+		return new int[] {top, roof};
+	}
+
+	/** Fills the ground under a footprint up to baseY and lays base on top, every cell of it becomes a key point */
+	private static void pad(ServerLevel level, Terrain terrain, int x0, int z0, int width, int length, int baseY, BlockState base, List<Vec3> keyPoints) {
+		BlockState fill = terrain.isCave() ? Blocks.STONE.defaultBlockState() : Blocks.DIRT.defaultBlockState();
+		for (int x = x0; x < x0 + width; x++) {
+			for (int z = z0; z < z0 + length; z++) {
+				for (int y = terrain.ground(x, z) + 1; y < baseY; y++) {
+					level.setBlock(new BlockPos(x, y, z), fill, FLAGS);
+				}
+				level.setBlock(new BlockPos(x, baseY, z), base, FLAGS);
+				keyPoints.add(new Vec3(x + 0.5, baseY + 1.5, z + 0.5));
+			}
+		}
+	}
+
+	/**
 	 * A level 3x3 concrete base at the highest ground under it, with room for a Blueprint.SIZE build and a drone above.
 	 * Returns the base's center block, every cell of it becomes a key point so obstacles keep clear
 	 */
@@ -344,14 +448,9 @@ public final class Arena {
 		for (int i = 0; i < 200; i++) {
 			BlockPos candidate = randomInside(rng, record.origin.getX(), record.origin.getZ(), half, 0);
 			Vec3 middle = Vec3.atCenterOf(candidate);
-			int top = Integer.MIN_VALUE;
-			int roof = Integer.MAX_VALUE;
-			for (int dx = -1; dx <= 1; dx++) {
-				for (int dz = -1; dz <= 1; dz++) {
-					top = Math.max(top, terrain.ground(candidate.getX() + dx, candidate.getZ() + dz));
-					roof = Math.min(roof, terrain.ceiling(candidate.getX() + dx, candidate.getZ() + dz));
-				}
-			}
+			int[] span = groundAndCeiling(terrain, candidate.getX() - 1, candidate.getZ() - 1, 3, 3);
+			int top = span[0];
+			int roof = span[1];
 			boolean spaced = keyPoints.stream().allMatch(k -> horizontal(middle, k) >= Math.max(minDistFromKeys, 4.0));
 			center = candidate;
 			baseY = top;
@@ -360,18 +459,7 @@ public final class Arena {
 			}
 		}
 		BlockState base = Blocks.CONCRETE.pick(color).defaultBlockState();
-		BlockState fill = terrain.isCave() ? Blocks.STONE.defaultBlockState() : Blocks.DIRT.defaultBlockState();
-		for (int dx = -1; dx <= 1; dx++) {
-			for (int dz = -1; dz <= 1; dz++) {
-				int x = center.getX() + dx;
-				int z = center.getZ() + dz;
-				for (int y = terrain.ground(x, z) + 1; y < baseY; y++) {
-					level.setBlock(new BlockPos(x, y, z), fill, FLAGS);
-				}
-				level.setBlock(new BlockPos(x, baseY, z), base, FLAGS);
-				keyPoints.add(new Vec3(x + 0.5, baseY + 1.5, z + 0.5));
-			}
-		}
+		pad(level, terrain, center.getX() - 1, center.getZ() - 1, 3, 3, baseY, base, keyPoints);
 		return new BlockPos(center.getX(), baseY, center.getZ());
 	}
 

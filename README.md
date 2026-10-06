@@ -16,6 +16,7 @@ Pilotable drone for Minecraft Java whose camera feeds external programs, for rec
 | --- | --- |
 | `training/data` | the mod's recordings in dev runs, and skill training data |
 | `training/checkpoints`, `training/reports` | training and evaluation |
+| `training/logs` | long training and collection runs |
 | `mod/run/logs` | the mod's JSONL logs in dev runs |
 
 All of them are gitignored. A normal install of the mod writes recordings and logs under `.minecraft/mcdrone/`.

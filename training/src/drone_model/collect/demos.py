@@ -15,10 +15,11 @@ from pathlib import Path
 import numpy as np
 from mcdrone import DroneEnv
 
-from .reader import Reader
-from .tool_experts import make_expert
+from ..paths import CHECKPOINTS, DATA, SCHEMATICS
+from ..experts.jobs import make_planner
+from ..perception.reader import Reader
+from ..experts.tools import make_expert
 
-DATA = Path(__file__).resolve().parents[2] / "data"
 
 
 def main() -> None:
@@ -30,15 +31,16 @@ def main() -> None:
     parser.add_argument("--terrain", choices=["flat", "rough", "cave"], default="flat")
     parser.add_argument("--task", default="navigate_to")
     parser.add_argument("--perception", choices=["reader", "mask"], default="reader", help="what experts see with, mask is the mod's ground truth")
-    parser.add_argument("--reader", type=Path, default=Path(__file__).resolve().parents[2] / "checkpoints" / "reader.pt")
+    parser.add_argument("--reader", type=Path, default=CHECKPOINTS / "reader.pt")
     parser.add_argument("--data", type=Path, default=DATA)
     parser.add_argument("--streams", default="rgb,depth,mask", help="add state to record block reader labels")
     parser.add_argument("--max-steps", type=int, default=None)
+    parser.add_argument("--size", type=int, default=5, help="structure or deposit side for the copy, build, and mine arenas")
     args = parser.parse_args()
     reader = Reader(args.reader) if args.perception == "reader" else None
 
     rng = np.random.default_rng(args.seed)
-    options = {"obstacles": args.obstacles, "terrain": args.terrain}
+    options = {"obstacles": args.obstacles, "terrain": args.terrain, "size": args.size}
     if args.max_steps:
         options["maxSteps"] = args.max_steps
     env = DroneEnv(task=args.task, tools=True, streams=tuple(args.streams.split(",")), record=True, action_pause_ms=0, task_options=options)
@@ -47,13 +49,18 @@ def main() -> None:
         for i in range(args.episodes):
             obs, info = env.reset(seed=args.seed + i)
             if i == 0:
-                # the recurrent policy reads the mask through this table, see seq_model.mask_lookup
+                # the recurrent policy reads the mask through this table, see policies.seq.mask_lookup
                 (args.data / args.task).mkdir(parents=True, exist_ok=True)
                 (args.data / args.task / "mask_ids.json").write_text(json.dumps(env.client.mask_ids), encoding="utf-8")
                 if "state" in env.streams:
                     # the block reader turns state stream ids into its labels through this table
                     (args.data / args.task / "state_names.json").write_text(json.dumps(env.client.state_names), encoding="utf-8")
-            expert = make_expert(args.task, env.client.mask_ids, reader=reader)
+            job = info["state"].get("job")
+            # arenas that hand the drone a job run the brain's planner for it, they need the block reader
+            if job and reader is not None and args.task not in ("replicate_build", "harvest_crops"):
+                expert = make_planner(job, env.client.mask_ids, reader, SCHEMATICS)
+            else:
+                expert = make_expert(args.task, env.client.mask_ids, reader=reader)
             labels = []
             terminated = truncated = False
             while not (terminated or truncated):

@@ -118,8 +118,8 @@ public final class ModNetworking {
 			try {
 				BlockPos a = payload.cornerA();
 				BlockPos b = payload.cornerB();
-				BlockPos min = new BlockPos(Math.min(a.getX(), b.getX()), Math.min(a.getY(), b.getY()), Math.min(a.getZ(), b.getZ()));
-				BlockPos max = new BlockPos(Math.max(a.getX(), b.getX()), Math.max(a.getY(), b.getY()), Math.max(a.getZ(), b.getZ()));
+				BlockPos min = BlockPos.min(a, b);
+				BlockPos max = BlockPos.max(a, b);
 				BlockPos size = max.subtract(min).offset(1, 1, 1);
 				if (size.getX() > BuildJob.MAX_SIZE || size.getY() > BuildJob.MAX_SIZE || size.getZ() > BuildJob.MAX_SIZE) {
 					throw new IllegalArgumentException("the selection is " + size.toShortString() + ", at most " + BuildJob.MAX_SIZE + " per side");

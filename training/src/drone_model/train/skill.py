@@ -11,25 +11,36 @@ import numpy as np
 import torch
 from torch.nn import functional as F
 
-from .skill import SkillPolicy
+from ..paths import CHECKPOINTS, DATA
+from ..policies.skill import SkillPolicy
 
-ROOT = Path(__file__).resolve().parents[2]
-DATA = ROOT / "data" / "skill"
+SKILL_DATA = DATA / "skill"
 FIELDS = ("rgb", "depth", "state", "goal", "move", "fire")
 
 
-def load(data: Path) -> list[dict[str, np.ndarray]]:
-    episodes = []
-    for f in sorted(data.glob("*/*.npz")):
+def episode_files(data: Path) -> list[Path]:
+    files = sorted(data.glob("*/*.npz"))
+    if not files:
+        raise SystemExit(f"no skill data in {data}, run python -m drone_model.collect.skill first")
+    return files
+
+
+def load(files: list[Path], stride: int) -> dict[str, torch.Tensor]:
+    """Every stride-th step of the episodes, read twice so the arrays are allocated once at full size"""
+    lengths, shapes = [], {}
+    for f in files:
         with np.load(f) as z:
-            episodes.append({k: z[k] for k in FIELDS})
-    if not episodes:
-        raise SystemExit(f"no skill data in {data}, run python -m drone_model.collect_skill first")
-    return episodes
-
-
-def concat(episodes) -> dict[str, torch.Tensor]:
-    return {k: torch.from_numpy(np.concatenate([e[k] for e in episodes])) for k in FIELDS}
+            lengths.append(len(range(0, len(z["move"]), stride)))
+            shapes = shapes or {k: (z[k].shape[1:], z[k].dtype) for k in FIELDS}
+    total = sum(lengths)
+    out = {k: np.empty((total, *shape), dtype=dtype) for k, (shape, dtype) in shapes.items()}
+    at = 0
+    for f, n in zip(files, lengths):
+        with np.load(f) as z:
+            for k in FIELDS:
+                out[k][at : at + n] = z[k][::stride]
+        at += n
+    return {k: torch.from_numpy(v) for k, v in out.items()}
 
 
 def losses(model, b: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
@@ -47,26 +58,27 @@ def losses(model, b: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data", type=Path, default=DATA)
+    parser.add_argument("--data", type=Path, default=SKILL_DATA)
     parser.add_argument("--steps", type=int, default=8000)
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--lr", type=float, default=5e-4)
     parser.add_argument("--init", type=Path, default=None)
-    parser.add_argument("--out", type=Path, default=ROOT / "checkpoints" / "skill.pt")
+    parser.add_argument("--out", type=Path, default=CHECKPOINTS / "skill.pt")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--stride", type=int, default=2, help="keep every stride-th step, neighbors are nearly the same frame")
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
     rng = np.random.default_rng(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    episodes = load(args.data)
-    order = rng.permutation(len(episodes))
-    n_val = max(1, len(episodes) // 10)
-    train = concat([episodes[i] for i in order[n_val:]])
-    val = concat([episodes[i] for i in order[:n_val]])
+    files = episode_files(args.data)
+    order = rng.permutation(len(files))
+    n_val = max(1, len(files) // 10)
+    train = load([files[i] for i in order[n_val:]], args.stride)
+    val = load([files[i] for i in order[:n_val]], args.stride)
     n = len(train["move"])
     fired = float(train["fire"].mean())
-    print(f"train {n} steps from {len(episodes) - n_val} episodes, val {len(val['move'])} steps, fire share {fired:.3f}, device {device}", flush=True)
+    print(f"train {n} steps from {len(files) - n_val} episodes, val {len(val['move'])} steps, fire share {fired:.3f}, device {device}", flush=True)
 
     model = SkillPolicy().to(device)
     if args.init is not None:

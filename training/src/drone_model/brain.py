@@ -17,15 +17,17 @@ from pathlib import Path
 
 from mcdrone import DroneEnv
 
-from .jobs import make_planner
-from .reader import Reader
-from .skill import with_skill
-from .tool_experts import tool_action
+from .paths import CHECKPOINTS, REPORTS, SCHEMATICS
+from .experts.jobs import make_planner
+from .perception.reader import Reader
+from .policies.skill import with_skill
+from .experts.tools import tool_action
 
-ROOT = Path(__file__).resolve().parents[2]
 EVAL_SEED = 100_000
-JOB_TASKS = ("copy_region", "build_schematic", "mine_region", "harvest_region", "replicate_build", "harvest_crops")
-DEFAULT_SCHEMATICS = ROOT.parent / "mod" / "build" / "run" / "clientGameTest" / "schematics"
+JOB_TASKS = (
+    "copy_region", "build_schematic", "mine_region", "harvest_region",
+    "replicate_build", "harvest_crops", "copy_build", "schematic_build", "mine_deposit", "gather_build",
+)
 
 
 def job_focus(job: dict) -> list[int]:
@@ -47,7 +49,7 @@ def run_job(env: DroneEnv, obs: dict, info: dict, reader: Reader, args) -> dict:
             # an empty snapshot at step 1 starts a new history on the dashboard
             env.client.publish_memory(step, [c.to_json() for c in planner.changes], snapshot=[] if step == 1 else None, focus=focus)
         if getattr(planner, "read_schematic", None) is not None and not saved:
-            out = ROOT / "reports" / f"read-{datetime.now():%Y%m%d-%H%M%S}.schem"
+            out = REPORTS / "reads" / f"{datetime.now():%Y%m%d-%H%M%S}.schem"
             planner.read_schematic.save(out)
             print(f"read the source box, saved {out}", flush=True)
             saved = True
@@ -81,8 +83,8 @@ def evaluate(env: DroneEnv, reader: Reader, args) -> None:
         results.append({"seed": EVAL_SEED + i, "success": bool(episode.get("success")), "steps": episode.get("step"), "metrics": episode.get("metrics")})
         print(f"seed {EVAL_SEED + i}: {'success' if episode.get('success') else 'failed'} in {episode.get('step')} steps, metrics {episode.get('metrics')}", flush=True)
     rate = sum(r["success"] for r in results) / len(results)
-    out = ROOT / "reports" / f"brain-{args.task}-{args.terrain}-{datetime.now():%Y%m%d-%H%M%S}.json"
-    out.parent.mkdir(exist_ok=True)
+    out = REPORTS / "brain" / f"{args.task}-s{args.size}-{args.terrain}-{args.perception}-{datetime.now():%Y%m%d-%H%M%S}.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps({"task": args.task, "terrain": args.terrain, "skill": str(args.skill), "success_rate": rate, "results": results}, indent=2))
     print(f"success {rate:.0%}, report {out}")
 
@@ -93,9 +95,11 @@ def main() -> None:
     parser.add_argument("--episodes", type=int, default=10)
     parser.add_argument("--terrain", choices=["flat", "rough", "cave"], default="flat")
     parser.add_argument("--obstacles", type=int, default=4)
-    parser.add_argument("--reader", type=Path, default=ROOT / "checkpoints" / "reader.pt")
+    parser.add_argument("--size", type=int, default=5, help="structure or deposit side for the copy, build, and mine arenas")
+    parser.add_argument("--perception", choices=["vision", "scan"], default="vision", help="scan hands the drone each job box read from the world")
+    parser.add_argument("--reader", type=Path, default=CHECKPOINTS / "reader.pt")
     parser.add_argument("--skill", type=Path, default=None, help="a trained cell skill flies the goals, the scripted controller does without one")
-    parser.add_argument("--schematics", type=Path, default=DEFAULT_SCHEMATICS, help="the game's schematics folder, for build jobs")
+    parser.add_argument("--schematics", type=Path, default=SCHEMATICS, help="the game's schematics folder, for build jobs")
     args = parser.parse_args()
 
     reader = Reader(args.reader)
@@ -103,7 +107,7 @@ def main() -> None:
         # the player's action pause stays on for jobs they start
         env = DroneEnv(tools=True, streams=("rgb", "depth"))
     else:
-        env = DroneEnv(task=args.task, tools=True, streams=("rgb", "depth"), action_pause_ms=0, task_options={"obstacles": args.obstacles, "terrain": args.terrain})
+        env = DroneEnv(task=args.task, tools=True, streams=("rgb", "depth"), action_pause_ms=0, task_options={"obstacles": args.obstacles, "terrain": args.terrain, "size": args.size, "perception": args.perception})
     try:
         if args.task is None:
             watch(env, reader, args)
