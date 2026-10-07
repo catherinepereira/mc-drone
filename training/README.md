@@ -17,6 +17,7 @@ Collection, evaluation, and videos need the game running with the mod and a worl
 ```
 src/mcdrone/                  bridge client, Gymnasium env, episode loader, schematic files
 src/drone_model/brain.py      runs jobs and publishes the memory
+src/drone_model/energy.py     learned job costs, and the battery keeper that flies home to charge
 src/drone_model/paths.py      checkpoint, data, report, schematic, and video folders
 src/drone_model/perception/   world map from depth and mask, block reader U-Net, voxel memory
 src/drone_model/experts/      A* planner, scripted experts for every task, job planners
@@ -32,7 +33,7 @@ Generated files stay in this folder and are gitignored:
 
 ```
 checkpoints/          current weights, older versions in checkpoints/archive/
-data/                 recorded episodes by task, cell skill data in data/skill/
+data/                 recorded episodes by task, cell skill data in data/skill/, learned battery costs in energy.json
 reports/              JSON reports in brain/, eval/, reader/, ppo/, and copy reads as .schem in reads/
 logs/                 output of long runs
 ```
@@ -130,9 +131,16 @@ powershell -File scripts\collect_reader.ps1                                 # fr
 
 - Copy: surveys the source box from views around its sides and over its top, then looks up close at cells under read blocks that no view reached. The memory's read is the plan (saved as a `.schem` in `reports/reads/`), a block the drone doesn't carry loses to a carried one with a fair share of the votes. It surveys the destination, breaks what doesn't belong there top down, then places the plan bottom up, each block against a face of a block already in place, from a viewpoint with room for the camera. Running out of a block sends it back to look at the source cells it read as that block.
 - Build: the same from the named schematic in the game's `schematics/` folder.
-- Mine: surveys the region and breaks every block of the kind it can see. With none in sight it digs trenches two wide every four blocks, top layer first, which leaves every block of the region with a face in a trench, and breaks what comes into view. Then it looks up close at wall blocks it hasn't seen well, and digs any block with a fair share of votes for the kind.
+- Mine: surveys the region and breaks every block of the job's kinds it can see. With none in sight it digs trenches two wide every four blocks, top layer first, which leaves every block of the region with a face in a trench, and breaks what comes into view. Then it looks up close at wall blocks it hasn't seen well, and digs any block with a fair share of votes for one of the kinds.
 - Copy or build with gathering (a job with a `gather` box, set as Materials on the in-game job screen or the dashboard, or the gather_build arena): before placing, it mines the gather box for the blocks it needs and doesn't carry, the ones in sight first, then trenches. A player's copy over a gather_build arena's three boxes succeeds with scan (1184 steps) and vision (1859 steps).
 - Harvest: harvesting and replanting a plot is one cycle, then a sweep looks down at each plot and plants the bare ones.
+- Return home: flies to the home charging station and lands on it.
+
+### Battery
+
+With the drone's battery on and a home station inside the job's geofence, a battery keeper (`energy.py`) rides along with every planner. At a job's start it estimates the job's cost: charge per cell of the job's boxes, learned per kind of job. If the charge minus the reserve and the flight home won't cover it, the drone charges first. Mid-job it turns home once the charge only covers the flight there plus the reserve. On the station it waits for a full charge, stepping 50 ticks at a time, then hands the drone back to the planner, which picks up where its memory left off. Chained jobs from the drone's queue each get the start-of-job check, so a big job after a long one charges before it starts.
+
+Each finished job moves the learned rates 30% of the way toward what it measured: charge spent working per cell for its kind, and charge per block on flights home. They're saved to `data/energy.json`. Before any job of a kind has finished, the keeper budgets one block break per cell, and before any trip home, flight at 0.25 blocks a tick. Training arenas don't drain the battery, so `--task` evaluations leave the file alone.
 
 The memory goes to the dashboard as it changes. Planners name the block to place and the mod picks the slot.
 

@@ -2,7 +2,7 @@ package com.catherinepereira.mcdrone.client;
 
 import com.catherinepereira.mcdrone.McDrone;
 import com.catherinepereira.mcdrone.ModContent;
-import com.catherinepereira.mcdrone.RemoteInput;
+import com.catherinepereira.mcdrone.TabletInput;
 import com.catherinepereira.mcdrone.client.hud.DroneHud;
 import com.catherinepereira.mcdrone.client.render.DroneModel;
 import com.catherinepereira.mcdrone.client.render.DroneRenderer;
@@ -49,15 +49,15 @@ public class McDroneClient implements ClientModInitializer {
 			ClientRuntime runtime = new ClientRuntime(mc);
 			Holder.runtime = runtime;
 			Holder.hud = new DroneHud(runtime);
-			RemoteInput.handler = new RemoteInput.Handler() {
+			TabletInput.handler = new TabletInput.Handler() {
 				@Override
-				public void select(RemoteInput.Target target, net.minecraft.core.BlockPos pos) {
+				public void select(TabletInput.Target target, net.minecraft.core.BlockPos pos) {
 					runtime.select(target, pos);
 				}
 
 				@Override
-				public void openJobs() {
-					runtime.openJobs();
+				public void openTablet() {
+					runtime.openTablet();
 				}
 			};
 			runtime.start();

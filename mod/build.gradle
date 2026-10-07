@@ -31,10 +31,28 @@ fabricApi {
 	}
 }
 
+repositories {
+	maven {
+		url = "https://api.modrinth.com/maven"
+		content {
+			includeGroup "maven.modrinth"
+		}
+	}
+	maven {
+		url = "https://repo.bluecolored.de/releases"
+		content {
+			includeGroup "de.bluecolored"
+		}
+	}
+}
+
 dependencies {
 	minecraft "com.mojang:minecraft:${project.minecraft_version}"
 	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
 	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+	// optional web map, the mod draws its regions and drones on it when it's installed
+	compileOnly "de.bluecolored:bluemap-api:${project.bluemap_api_version}"
+	localRuntime "maven.modrinth:bluemap:${project.bluemap_version}"
 }
 
 processResources {

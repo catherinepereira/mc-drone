@@ -15,11 +15,12 @@ public enum TaskKind {
 	COPY_BUILD("copy_build"),
 	SCHEMATIC_BUILD("schematic_build"),
 	MINE_DEPOSIT("mine_deposit"),
-	GATHER_BUILD("gather_build");
+	GATHER_BUILD("gather_build"),
+	RETURN_HOME("return_home");
 
 	/** Jobs run in the player's own world, the rest build a training arena */
 	public boolean isJob() {
-		return this == COPY_REGION || this == BUILD_SCHEMATIC || this == MINE_REGION || this == HARVEST_REGION;
+		return this == COPY_REGION || this == BUILD_SCHEMATIC || this == MINE_REGION || this == HARVEST_REGION || this == RETURN_HOME;
 	}
 
 	public final String id;

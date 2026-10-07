@@ -1,0 +1,18 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "redstone",
+  "key": {
+    "C": "minecraft:copper_ingot",
+    "L": "minecraft:lightning_rod",
+    "I": "minecraft:iron_ingot",
+    "R": "minecraft:redstone_block"
+  },
+  "pattern": [
+    "CLC",
+    "IRI",
+    "CCC"
+  ],
+  "result": {
+    "id": "mcdrone:charging_station"
+  }
+}

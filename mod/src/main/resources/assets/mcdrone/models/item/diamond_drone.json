@@ -1,6 +1,6 @@
 {
   "parent": "minecraft:item/generated",
   "textures": {
-    "layer0": "mcdrone:item/drone"
+    "layer0": "mcdrone:item/diamond_drone"
   }
 }

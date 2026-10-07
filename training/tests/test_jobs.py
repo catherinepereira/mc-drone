@@ -73,7 +73,7 @@ def test_scans_fill_memory_and_dig_shafts_to_buried_blocks(tmp_path):
     (tmp_path / "scans").mkdir()
     s.save(tmp_path / "scans" / "r.schem")
     p = MinePlanner(MASK_IDS, reader=object(), schematics=tmp_path)
-    job = {"kind": "mine", "region": [0, 0, 0, 2, 2, 0], "block": "minecraft:diamond_ore", "scan": {"region": "scans/r.schem"}}
+    job = {"kind": "mine", "region": [0, 0, 0, 2, 2, 0], "blocks": ["minecraft:diamond_ore"], "scan": {"region": "scans/r.schem"}}
     p.load_scans(job)
     assert p.scanned_in(job["region"], {"minecraft:diamond_ore"}) == [(1, 0, 0)]
     # buried under two layers: the shaft starts at the top of the ore's column
@@ -102,3 +102,50 @@ def test_scanned_fields_give_ripe_crops_by_age_and_bare_plots(tmp_path):
     p.broken.add((0, 1, 0))
     assert p.ripe_cells(state) == []
     assert p.sweep_plots(state) == [(0, 0, 0), (2, 0, 0)]
+
+
+def test_a_pocket_under_stone_gets_a_shaft_not_a_dig_through_it(tmp_path):
+    from mcdrone.schematic import Schematic
+
+    from drone_model.experts.jobs import MinePlanner
+
+    # a column of ore, an air pocket, then stone on top, with stone beside it
+    s = Schematic.empty(2, 3, 1)
+    s.blocks[:, :, :] = "minecraft:stone"
+    s.blocks[0, 0, 0] = "minecraft:coal_ore"
+    s.blocks[1, 0, 0] = "minecraft:air"
+    (tmp_path / "scans").mkdir()
+    s.save(tmp_path / "scans" / "p.schem")
+    p = MinePlanner(MASK_IDS, reader=object(), schematics=tmp_path)
+    job = {"kind": "mine", "region": [0, 0, 0, 1, 2, 0], "blocks": ["minecraft:coal_ore"], "scan": {"region": "scans/p.schem"}}
+    p.load_scans(job)
+    p.dig({"pos": [0.5, 5.0, 0.5], "yaw": 0.0, "pitch": 0.0, "camera": {"eyeHeight": 0.2}}, (0, 0, 0), "minecraft:coal_ore", job["region"])
+    # the drone works the stone capping the pocket first
+    assert p.working_on == (0, 2, 0)
+
+
+def test_aim_angle_is_small_looking_straight_down_at_any_yaw():
+    from drone_model.experts.tools import aim_angle
+
+    for yaw in (0.0, 90.0, -137.0):
+        state = {"pos": [0.5, 3.0, 0.5], "yaw": yaw, "pitch": 89.5, "camera": {"eyeHeight": 0.2}}
+        # a point a hair off the vertical, where the yaw error alone swings wildly
+        assert aim_angle(state, (0.51, 0.0, 0.5)) < 1.0
+    assert aim_angle({"pos": [0, 0, 0], "yaw": 0.0, "pitch": 0.0, "camera": {"eyeHeight": 0.0}}, (5.0, 0.0, 0.0)) > 80.0
+
+
+def test_body_clear_needs_room_for_the_whole_drone(tmp_path):
+    from drone_model.experts.jobs import MinePlanner
+
+    p = MinePlanner(MASK_IDS, reader=object())
+    box = [0, 0, 0, 3, 2, 3]
+    # air everywhere except one stone at (1, 2, 1), above the box counts as open
+    for x in range(4):
+        for y in range(3):
+            for z in range(4):
+                p.dug.add((x, y, z))
+    p.dug.discard((1, 2, 1))
+    assert p.body_clear((2.5, 2.5, 2.5), box)
+    assert not p.body_clear((1.5, 2.5, 1.5), box)
+    # straddling a cell edge touches the stone too
+    assert not p.body_clear((2.1, 2.5, 1.5), box)

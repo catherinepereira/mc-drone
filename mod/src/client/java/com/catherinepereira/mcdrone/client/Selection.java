@@ -12,7 +12,7 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * The player's copy selection: two source corners and the paste point, where the source's min corner lands.
- * Set with the drone remote in game or from the dashboard
+ * Set with the tablet in game or from the dashboard
  */
 public final class Selection {
 	private static final int SOURCE_COLOR = 0x3D7BD9;
@@ -45,7 +45,7 @@ public final class Selection {
 	public @Nullable String problem() {
 		BlockPos size = this.size();
 		if (size == null) {
-			return "select both source corners with the drone remote";
+			return "select both source corners with the tablet";
 		}
 		if (size.getX() > BuildJob.MAX_SIZE || size.getY() > BuildJob.MAX_SIZE || size.getZ() > BuildJob.MAX_SIZE) {
 			return "the source is " + size.toShortString() + ", at most " + BuildJob.MAX_SIZE + " per side";

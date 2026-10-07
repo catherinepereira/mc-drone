@@ -36,8 +36,8 @@ export function RegionsPanel() {
     <Card title="Regions" actions={<Pill>{regions.length} saved</Pill>}>
       {regions.length === 0 ? (
         <p className="text-text-dim text-sm">
-          No regions yet. Select two corners with the drone remote or in Jobs,
-          then save them here.
+          No regions yet. Select two corners with the tablet or in Jobs, then
+          save them here.
         </p>
       ) : (
         <ul className="divide-border divide-y">
@@ -102,7 +102,7 @@ export function RegionsPanel() {
         </Button>
       </div>
       <p className="text-text-muted mt-2 text-xs">
-        {PURPOSES.find((p) => p.value === purpose)?.hint}. Holding the remote
+        {PURPOSES.find((p) => p.value === purpose)?.hint}. Holding the tablet
         shows every region in game.
       </p>
     </Card>

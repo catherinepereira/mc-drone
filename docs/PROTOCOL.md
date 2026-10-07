@@ -27,6 +27,7 @@ Text frames are JSON objects with a `type` field. Binary frames are observations
 | `region_save` | `name`, `purpose` (`general`, `safe`, `mine`, or `farm`) | anyone, saves the selection's source box as a named region, replacing one with the same name |
 | `region_delete` | `region` (a region id) | anyone |
 | `region_use` | `region` | anyone, loads the region's box into the selection's source corners |
+| `rename` | `name` (at most 32 characters, blank for the default `Drone`) | anyone, names the player's drone, shown over it as `name (owner)` |
 | `ping` | `id` | anyone, answered by `pong` |
 
 Only one controller at a time. A second `hello` with role `controller` gets an `error` and stays an observer.
@@ -36,7 +37,7 @@ Only one controller at a time. A second `hello` with role `controller` gets an `
 | type | fields |
 | --- | --- |
 | `welcome` | `schema`, `role`, `session`, `config`, `status`, `maskIds`, `itemIds` |
-| `status` | `mode`, `controller`, `observers`, `recording`, `recordArmed`, `piloting`, `droneId`, `inWorld`, `task`, `episode`, `selection`, `regions` |
+| `status` | `mode`, `controller`, `observers`, `recording`, `recordArmed`, `piloting`, `droneId`, `inWorld`, `task`, `episode`, `selection`, `regions`, `drones` |
 | `log` | `entry` (same shape as a log line) |
 | `metrics` | `sps`, `fps`, `captureMs`, `raycastMs`, `encodeMs`, `queueDepth`, `droppedFrames`, `observers` |
 | `pong` | `replyTo`, `tick` |
@@ -86,6 +87,8 @@ Header:
   "state": {
     "pos": [x, y, z],
     "vel": [x, y, z],
+    "tier": "copper",
+    "battery": { "charge": 0.82, "home": [x, y, z], "docked": false, "enabled": true, "flightPerTick": 0.0000556, "hoverShare": 0.5, "breakCost": 0.00222, "chargePerTick": 0.000278, "reserve": 0.1 },
     "yaw": 90.0,
     "pitch": 10.0,
     "camera": { "fov": 70.0, "windowAspect": 1.78, "eyeHeight": 0.34 },
@@ -129,7 +132,8 @@ Header:
 - `job` is the drone's instruction for a copy or build job, see Jobs. Policies may read it.
 - `marker` and `arena` are privileged: the true goal and layout, for debugging and the dashboard's map. Policies and the scripted experts must not read them. Everything else is fair game, including `bounds`, the task's geofence.
 - `camera` lets a script back-project depth into world points with the same frustum the mod rendered.
-- `events` holds tool events since the previous observation: `break`, `break_failed`, `place`, `place_failed`, `open`, `open_failed`, `close`, `transfer`, `transfer_failed`.
+- `events` holds tool events since the previous observation: `break`, `break_failed`, `place`, `place_failed`, `open`, `open_failed`, `close`, `transfer`, `transfer_failed`. A tool used with a flat battery fails with reason `battery flat`.
+- `tier` is the active drone's (`copper`, `iron`, or `diamond`), its pickaxe sets how fast blocks break. `battery` is its charge from 0 to 1, its home charging station or null, whether it's docked there, and the battery settings from `config/mcdrone-battery.json`: charge per tick of flight, the share hovering draws, the charge a broken block costs, charge per tick on the station, and the reserve to keep. With `enabled` false the charge never drops.
 - `collided` is true when a block or entity stopped the drone on the last simulated tick.
 - `episode.metrics` is the task's progress counters, see Tasks.
 - `rgb` rows go top to bottom.
@@ -210,14 +214,19 @@ Jobs run in the player's own world: nothing is built or cleared, the drone keeps
 | --- | --- | --- |
 | `copy_region` | `source` (`[x0, y0, z0, x1, y1, z1]`, any two opposite corners) or `region` (a saved region's name), `dest` (`[x, y, z]` or a saved region's name), `gather` (optional, a box or a saved region's name) | the source box as it was when the job started |
 | `build_schematic` | `schematic` (a file name in the game's `schematics` folder), `dest`, `gather` | the schematic |
-| `mine_region` | `region` (`[x0, y0, z0, x1, y1, z1]` or a saved region's name), `block` (such as `minecraft:coal_ore`) | no block of that kind left in the region |
+| `mine_region` | `region` (`[x0, y0, z0, x1, y1, z1]` or a saved region's name), `blocks` (a list, or names separated by commas, such as `coal_ore, iron_ore`, without a namespace they're `minecraft:`) | no block of those kinds left in the region |
 | `harvest_region` | `region`, `crop` (such as `minecraft:wheat`) | every ripe crop harvested and every farmland cell planted |
+| `return_home` | none | the drone docked on its home charging station |
 
-Boxes and points fall back to the player's selection, set with the drone remote or `select`. `dest` is where the target's lowest corner lands, a saved region's lowest corner when it names one, and the copy keeps the source's orientation. With `gather` the drone mines the blocks it needs from that box before building. It can't overlap the copy's source or the destination, and is at most 32 blocks per side. Copy and build boxes are at most 16 blocks per side and mining regions 32, every box is within 96 blocks of the player, and only the singleplayer host can start jobs. During a job the server refuses drone breaks and places outside the job's box with a `break_failed` or `place_failed` event, so a copy only touches its destination and gather box, and a mining job never digs out of its region.
+Boxes and points fall back to the player's selection, set with the tablet or `select`. `dest` is where the target's lowest corner lands, a saved region's lowest corner when it names one, and the copy keeps the source's orientation. With `gather` the drone mines the blocks it needs from that box before building. It can't overlap the copy's source or the destination, and is at most 32 blocks per side. Copy and build boxes are at most 16 blocks per side and mining regions 32, every box is within 96 blocks of the player, and only the singleplayer host can start jobs. During a job the server refuses drone breaks and places outside the job's box with a `break_failed` or `place_failed` event, so a copy only touches its destination and gather box, and a mining job never digs out of its region.
 
-`state.job` is `{ "kind": "copy" | "build", "source": [x0, y0, z0, x1, y1, z1], "schematic": "house.schem", "dest": [x0, y0, z0, x1, y1, z1], "gather": [x0, y0, z0, x1, y1, z1], "size": [w, h, l] }` with inclusive corners, `source` only for copies, `schematic` only for builds, and `gather` only when the drone mines its materials there. A mining job's is `{ "kind": "mine", "region": [x0, y0, z0, x1, y1, z1], "block": "minecraft:coal_ore" }`. The drone gets the boxes, never the copy's contents: in vision perception it reads those with its camera, see Perception. The geofence covers the job's boxes and the drone's starting point plus 6 blocks around them.
+`state.job` is `{ "kind": "copy" | "build", "source": [x0, y0, z0, x1, y1, z1], "schematic": "house.schem", "dest": [x0, y0, z0, x1, y1, z1], "gather": [x0, y0, z0, x1, y1, z1], "size": [w, h, l] }` with inclusive corners, `source` only for copies, `schematic` only for builds, and `gather` only when the drone mines its materials there. A mining job's is `{ "kind": "mine", "region": [x0, y0, z0, x1, y1, z1], "blocks": ["minecraft:coal_ore", "minecraft:iron_ore"] }`, and a return home's `{ "kind": "return_home", "station": [x, y, z] }`. The drone gets the boxes, never the copy's contents: in vision perception it reads those with its camera, see Perception. The geofence covers the job's boxes, the drone's starting point, and its home station when that's within 96 blocks of the player, plus 6 blocks around them.
 
-Copy and build metrics are matching destination cells, non-air target blocks, and destination blocks that don't belong. Each match is worth 10 divided by the target's block count, each wrong block costs 1, and success needs every target block in place with nothing extra. Mining metrics are the blocks of the kind left and how many there were, each one mined is worth 10 divided by the starting count, and success is none left. Block properties such as stair facing don't count yet. A job's default `maxSteps` is 100000.
+Copy and build metrics are matching destination cells, non-air target blocks, and destination blocks that don't belong. Each match is worth 10 divided by the target's block count, each wrong block costs 1, and success needs every target block in place with nothing extra. Mining metrics are the blocks of the kind left and how many there were, each one mined is worth 10 divided by the starting count, and success is none left. Block properties such as stair facing don't count yet. A job's default `maxSteps` is 100000. A return home has no metrics, the client ends it as a success once the drone docks.
+
+### Queues
+
+Each drone keeps a queue of jobs, saved with it. `status.drones` lists the player's loaded drones as `{ "id", "name", "tier", "active", "pos", "charge", "battery", "home", "docked", "queue" }`, where `battery` is whether the battery is enabled and `queue` holds each job's `reset` options plus a `label` such as `mine coal_ore in quarry`. The status goes out again whenever a drone's entry changes, checked once a second. With a controller connected, the mod starts the next queued job when one succeeds, and sends the drone home after the last one or after a job that fails.
 
 ### Perception
 
@@ -228,7 +237,7 @@ The config's `perception` picks how the drone learns what blocks a job involves.
 
 ### Regions
 
-Regions are named boxes saved with the world in `mcdrone-regions.json`, at most 128 blocks across and any height. `status.regions` lists them as `{ "id", "name", "purpose", "box": [x0, y0, z0, x1, y1, z1] }`. Holding the drone remote outlines each one in its purpose's color.
+Regions are named boxes saved with the world in `mcdrone-regions.json`, at most 128 blocks across and any height. `status.regions` lists them as `{ "id", "name", "purpose", "box": [x0, y0, z0, x1, y1, z1] }`. Holding the tablet outlines each one in its purpose's color.
 
 | Purpose | Effect |
 | --- | --- |

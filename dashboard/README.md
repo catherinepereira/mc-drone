@@ -15,7 +15,8 @@ Start Minecraft with the mod first. The page reconnects every two seconds until 
 
 | Tab | What it does |
 | --- | --- |
-| Live | Camera, depth, and mask with hover readouts (pixel, depth, block name), the drone inventory and open container, a top-down arena map with the geofence, drone state, episode progress, recent actions, controls, the Jobs panel for the copy selection, copy, schematic, and mining jobs, and saving schematics, the Regions panel for saving, selecting, and deleting named regions, and the Drone memory panel, which shows a running policy's voxel memory layer by layer with a feed of its changes and a step slider to replay them |
+| Live | Camera, depth, and mask with hover readouts (pixel, depth, block name), the drone inventory and open container, a top-down arena map with the geofence, drone state, episode progress, recent actions, controls, the Drones panel with each drone's tier, charge, home station, and job queue, the Jobs panel for the copy selection, copy, schematic, and mining jobs, and saving schematics, the Regions panel for saving, selecting, and deleting named regions, and the Drone memory panel, which shows a running policy's voxel memory layer by layer with a feed of its changes and a step slider to replay them |
+| Map | BlueMap's web map of the world from `http://localhost:8100`, with the saved regions, drones, and charging stations as markers, beside the Drones panel |
 | Episodes | Recorded episodes with a frame scrubber, per-step reward, and move to trash |
 | Logs | Live log tail with level, event, and episode filters, click a line for its full JSON |
 | Metrics | Steps and frames per second, capture and raycast time, encode time, bridge round trip, dropped frames, recorder queue |

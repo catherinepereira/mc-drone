@@ -66,6 +66,19 @@ def aim_errors(state: dict, point) -> tuple[float, float, float]:
     return yaw_error, pitch_error, math.sqrt(dx * dx + dy * dy + dz * dz)
 
 
+def aim_angle(state: dict, point) -> float:
+    """
+    Degrees between where the camera looks and the direction to point.
+    Unlike the yaw error it stays meaningful looking straight down, where yaw barely moves the crosshair
+    """
+    pos = state["pos"]
+    to = np.array([point[0] - pos[0], point[1] - (pos[1] + state["camera"]["eyeHeight"]), point[2] - pos[2]])
+    yaw, pitch = math.radians(state["yaw"]), math.radians(state.get("pitch", 0.0))
+    forward = np.array([-math.sin(yaw) * math.cos(pitch), -math.sin(pitch), math.cos(yaw) * math.cos(pitch)])
+    cos = float(forward @ to) / max(float(np.linalg.norm(to)), 1e-6)
+    return math.degrees(math.acos(max(-1.0, min(1.0, cos))))
+
+
 def place_viewpoint(state: dict, cell, d) -> tuple[float, float, float]:
     """
     Where the camera goes to place into cell against the support at cell + d: in front of a side or bottom face,
@@ -125,6 +138,8 @@ class HonestExpert:
         self.stalled_climbs = 0
         self.still_steps = 0
         self.unstick_left = 0
+        # called with the state each step before decide, an action it returns replaces the planner's (see energy.BatteryKeeper)
+        self.errand = None
 
     def act(self, state: dict, obs: dict) -> dict:
         self.intent = None
@@ -156,17 +171,19 @@ class HonestExpert:
             self.last_pos = tuple(pos)
             self.last_up = 0.5
             return tool_action([-0.6, 0.0, 0.5, 0.6, 0.0])
-        action = self.decide(state)
+        action = self.errand(state) if self.errand is not None else None
+        if action is None:
+            action = self.decide(state)
         self.watch_progress(state, action)
         self.last_up = float(action["move"][2])
         return action
 
     def watch_progress(self, state: dict, action: dict) -> None:
-        """Back off and turn when told to fly forward but the drone hasn't moved, it is pressed against something"""
+        """Back off and turn when told to move but the drone hasn't, it is pressed against something or boxed in"""
         pos = tuple(state["pos"])
         moved = self.last_pos is None or math.dist(pos, self.last_pos) > 0.03
         self.last_pos = pos
-        pushing = action["move"][0] > 0.3 and TOOLS[action["tool"]] == "none"
+        pushing = max(abs(float(v)) for v in action["move"][:3]) > 0.3 and TOOLS[action["tool"]] == "none"
         self.still_steps = 0 if moved or not pushing else self.still_steps + 1
         if self.still_steps >= 8:
             self.still_steps = 0
@@ -276,8 +293,7 @@ class HonestExpert:
 
     def dwell_on(self, state: dict, look) -> None:
         """Counts frames aimed at look, then moves on to the next of self.views after SURVEY_DWELL of them"""
-        yaw_error, pitch_error, _ = aim_errors(state, look)
-        if abs(yaw_error) < AIM_TOLERANCE and abs(pitch_error) < AIM_TOLERANCE or self.view_steps > SURVEY_LIMIT + 20:
+        if aim_angle(state, look) < AIM_TOLERANCE or self.view_steps > SURVEY_LIMIT + 20:
             self.dwell += 1
         if self.dwell >= SURVEY_DWELL:
             self.views.pop(0)
@@ -315,8 +331,8 @@ class HonestExpert:
             # something keeps getting in the way of the crosshair, rise and close in for a steeper look
             lift = min(4.0, self.occluded_steps * 0.15)
             move, arrived = self.fly(state, point, max(1.2, standoff - lift / 2), hover + lift, column=(block[0], block[2]))
-        yaw_error, pitch_error, dist = aim_errors(state, point)
-        aimed = abs(yaw_error) < AIM_TOLERANCE and abs(pitch_error) < AIM_TOLERANCE and dist <= REACH
+        dist = math.dist(point, (state["pos"][0], state["pos"][1] + state["camera"]["eyeHeight"], state["pos"][2]))
+        aimed = aim_angle(state, point) < AIM_TOLERANCE and dist <= REACH
         on_target = aimed and looking_at(state, block)
         # the remembered spot can be off by a block, the crosshair on the right kind of block nearby is good enough
         hit = state.get("lookingAt")
@@ -324,7 +340,7 @@ class HonestExpert:
             on_target = aimed and looking_at(state, block) and hit.get("face") == face
         elif not on_target and expect and hit and hit["block"] == expect and hit["dist"] <= REACH:
             near = max(abs(a - b) for a, b in zip(hit["pos"], block)) <= 1
-            on_target = near and abs(yaw_error) < 2 * AIM_TOLERANCE and abs(pitch_error) < 2 * AIM_TOLERANCE
+            on_target = near and aim_angle(state, point) < 2 * AIM_TOLERANCE
         blocked_view = hit is not None and hit["dist"] < dist - 0.6 and tuple(hit["pos"]) != block
         self.occluded_steps = self.occluded_steps + 1 if arrived and not on_target and blocked_view else max(0, self.occluded_steps - 1)
         # aimed right at the remembered spot and something else is there, or the ray passes through it
@@ -773,8 +789,7 @@ class HarvestExpert(HonestExpert):
         via = place_viewpoint(state, crop, (0, -1, 0))
         self.sweep_steps += 1
         move, arrived = self.fly_to_view(state, via, point)
-        yaw_error, pitch_error, _ = aim_errors(state, point)
-        aimed = arrived and abs(yaw_error) < AIM_TOLERANCE and abs(pitch_error) < AIM_TOLERANCE
+        aimed = arrived and aim_angle(state, point) < AIM_TOLERANCE
         seen = self.center_class() if aimed else None
         done = crop in self.planted or plot in self.unreachable or self.sweep_steps > SWEEP_LIMIT
         if done or (seen is not None and seen != "minecraft:farmland"):

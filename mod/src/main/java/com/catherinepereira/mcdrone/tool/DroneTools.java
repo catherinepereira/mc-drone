@@ -25,7 +25,6 @@ import net.minecraft.resources.Identifier;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.item.Items;
 import net.minecraft.world.item.context.BlockPlaceContext;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.block.Block;
@@ -38,7 +37,7 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * Applies one tick of drone tool use on the server.
- * Mining follows vanilla's player formula with a stone pickaxe, so block hardness and harvest rules match survival
+ * Mining follows vanilla's player formula with the pickaxe of the drone's tier, so block hardness and harvest rules match survival
  */
 public final class DroneTools {
 	public static final double REACH = 4.5;
@@ -48,8 +47,8 @@ public final class DroneTools {
 	private DroneTools() {
 	}
 
-	private static ItemStack tool() {
-		return new ItemStack(Items.STONE_PICKAXE);
+	private static ItemStack tool(DroneEntity drone) {
+		return new ItemStack(drone.tier().pickaxe);
 	}
 
 	public static DroneSyncPayload apply(ServerPlayer player, DroneEntity drone, int seq, ToolRequest req) {
@@ -61,6 +60,8 @@ public final class DroneTools {
 		validateContainer(level, drone, events);
 		if (req.slot() < 0 || req.slot() >= DroneEntity.INVENTORY_SIZE) {
 			events.add(event("error", "message", "slot out of range"));
+		} else if (drone.flat() && req.tool() != DroneTool.NONE && req.tool() != DroneTool.CLOSE) {
+			events.add(event(req.tool().name().toLowerCase(java.util.Locale.ROOT) + "_failed", "reason", "battery flat"));
 		} else {
 			switch (req.tool()) {
 				case BREAK -> mine(level, drone, changed, events, record);
@@ -134,7 +135,7 @@ public final class DroneTools {
 		if (hardness < 0 || state.is(ModContent.MARKER)) {
 			return;
 		}
-		ItemStack tool = tool();
+		ItemStack tool = tool(drone);
 		boolean correct = !state.requiresCorrectToolForDrops() || tool.isCorrectToolForDrops(state);
 		drone.breakProgress += hardness == 0 ? 1.0F : tool.getDestroySpeed(state) / hardness / (correct ? 30.0F : 100.0F);
 		if (drone.breakProgress < 1.0F) {
@@ -150,6 +151,7 @@ public final class DroneTools {
 			}
 		}
 		changed.add(pos);
+		drone.spendBreak();
 		JsonObject e = event("break", "block", BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString());
 		e.add("pos", Json.pos(pos));
 		events.add(e);

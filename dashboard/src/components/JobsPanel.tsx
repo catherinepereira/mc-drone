@@ -47,7 +47,7 @@ function PointInput({
 }
 
 /**
- * The copy selection and job controls. Corners come from the drone remote in game or are typed here,
+ * The copy selection and job controls. Corners come from the tablet in game or are typed here,
  * either way they are the same selection. Copies and builds can paste at a saved region instead of the paste point,
  * and mine their materials from another saved region first
  */
@@ -99,7 +99,7 @@ export function JobsPanel() {
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         {POINTS.map((p) => (
           <PointInput
-            // remount when the remote moves a corner so the field shows it
+            // remount when the tablet moves a corner so the field shows it
             key={`${p.key}:${selection?.[p.key]?.join() ?? ""}`}
             label={p.label}
             value={selection?.[p.key] ?? null}
@@ -182,10 +182,12 @@ export function JobsPanel() {
             </select>
           </Field>
           <div className="flex-1">
-            <Field label={mineKind === "mine" ? "Block" : "Crop"}>
+            <Field label={mineKind === "mine" ? "Blocks" : "Crop"}>
               <input
                 className={inputClass}
-                placeholder={mineKind === "mine" ? "coal_ore" : "wheat"}
+                placeholder={
+                  mineKind === "mine" ? "coal_ore, iron_ore" : "wheat"
+                }
                 value={mineBlock}
                 onChange={(e) => setMineBlock(e.target.value)}
               />
@@ -201,11 +203,14 @@ export function JobsPanel() {
             onClick={() =>
               start({
                 task: mineKind === "mine" ? "mine_region" : "harvest_region",
-                [mineKind === "mine" ? "block" : "crop"]: mineBlock.includes(
-                  ":",
-                )
-                  ? mineBlock.trim()
-                  : `minecraft:${mineBlock.trim()}`,
+                // the mod reads a list of names, without a namespace they're minecraft's
+                ...(mineKind === "mine"
+                  ? { blocks: mineBlock.trim() }
+                  : {
+                      crop: mineBlock.includes(":")
+                        ? mineBlock.trim()
+                        : `minecraft:${mineBlock.trim()}`,
+                    }),
                 ...(mineRegion ? { region: mineRegion } : {}),
               })
             }

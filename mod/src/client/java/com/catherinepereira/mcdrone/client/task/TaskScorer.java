@@ -224,6 +224,15 @@ public final class TaskScorer {
 		return p.x >= b[0] && p.y >= b[1] && p.z >= b[2] && p.x <= b[3] && p.y <= b[4] && p.z <= b[5];
 	}
 
+	/** Ends the episode as a success for a goal the client checks itself, such as docking */
+	public void complete() {
+		if (this.active && !this.done()) {
+			this.succeed();
+			this.stepReward += SUCCESS_BONUS;
+			this.totalReward += SUCCESS_BONUS;
+		}
+	}
+
 	private void succeed() {
 		this.success = true;
 		this.truncated = false;
@@ -232,6 +241,8 @@ public final class TaskScorer {
 	private @Nullable Vec3 currentGoal(Vec3 drone, Predicate<BlockPos> isTarget) {
 		return switch (this.kind) {
 			case NAVIGATE_TO -> Vec3.atCenterOf(this.marker);
+			// the marker is the station, the drone docks on its top
+			case RETURN_HOME -> Vec3.atCenterOf(this.marker.above());
 			case DIG_BLOCK -> this.nearestTarget(drone, isTarget);
 			case PLACE_BLOCK -> point("goal");
 			case CHEST_TRANSFER -> {

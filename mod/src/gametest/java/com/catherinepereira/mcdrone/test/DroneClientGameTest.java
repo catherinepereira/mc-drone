@@ -1,10 +1,14 @@
 package com.catherinepereira.mcdrone.test;
 
-import com.catherinepereira.mcdrone.ModContent;
 import com.catherinepereira.mcdrone.client.ClientRuntime;
 import com.catherinepereira.mcdrone.client.McDroneClient;
 import com.catherinepereira.mcdrone.client.hud.JobScreen;
+import com.catherinepereira.mcdrone.ModContent;
 import com.catherinepereira.mcdrone.entity.DroneEntity;
+import com.catherinepereira.mcdrone.entity.DroneItem;
+import com.catherinepereira.mcdrone.entity.DroneTier;
+import com.catherinepereira.mcdrone.entity.Drones;
+import com.catherinepereira.mcdrone.task.TaskKind;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import java.nio.file.Files;
@@ -14,12 +18,16 @@ import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext;
 import net.fabricmc.fabric.api.client.gametest.v1.context.TestSingleplayerContext;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.InactivityFpsLimit;
-import net.minecraft.server.level.ServerLevel;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.inventory.ChestMenu;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
 
 /**
  * Runs in a full game client: builds a superflat world, flies navigate_to over the bridge in lockstep
@@ -264,13 +272,15 @@ public class DroneClientGameTest implements FabricClientGameTest {
 			mineJob.addProperty("id", id);
 			JsonObject mineOptions = new JsonObject();
 			mineOptions.addProperty("task", "mine_region");
-			mineOptions.addProperty("block", "minecraft:coal_ore");
+			// two kinds, only coal is in the box, so the job is done once the ore is out
+			mineOptions.addProperty("blocks", "coal_ore, minecraft:iron_ore");
 			mineOptions.add("region", ints(ox - 1, oy - 1, oz - 1, ox + 1, oy + 1, oz + 1));
 			mineJob.add("options", mineOptions);
 			bridge.send(mineJob);
 			obs = awaitObs(ctx, bridge, id++);
 			JsonObject mine = obs.header().getAsJsonObject("state").getAsJsonObject("job");
 			check(mine != null && mine.get("kind").getAsString().equals("mine"), "expected a mine job, got " + mine);
+			check(mine.getAsJsonArray("blocks").size() == 2, "expected both kinds in the mine job, got " + mine);
 			boolean mined = false;
 			for (int i = 0; i < 400 && !mined; i++) {
 				JsonObject step = msg("step");
@@ -305,8 +315,7 @@ public class DroneClientGameTest implements FabricClientGameTest {
 			// a player using the drone opens its inventory as a chest and can put items in
 			String chestProblem = world.getServer().computeOnServer(server -> {
 				ServerPlayer player = server.getPlayerList().getPlayers().getFirst();
-				ServerLevel level = (ServerLevel) player.level();
-				DroneEntity drone = level.getEntities(ModContent.DRONE, d -> d.isOwnedBy(player)).stream().findFirst().orElse(null);
+				DroneEntity drone = Drones.active(player);
 				if (drone == null) {
 					return "no drone";
 				}
@@ -322,6 +331,110 @@ public class DroneClientGameTest implements FabricClientGameTest {
 				return drone.inventory.countItem(Items.DIRT) == before + 5 ? "" : "the dirt didn't move into the drone";
 			});
 			check(chestProblem.isEmpty(), chestProblem);
+
+			// the nametag reads "name (owner)", renamed over the bridge and then with a name tag
+			JsonObject rename = msg("rename");
+			rename.addProperty("name", "Harvester");
+			bridge.send(rename);
+			ctx.waitTicks(5);
+			String nameProblem = world.getServer().computeOnServer(server -> {
+				ServerPlayer player = server.getPlayerList().getPlayers().getFirst();
+				DroneEntity drone = Drones.active(player);
+				String owner = player.getName().getString();
+				if (!drone.getCustomName().getString().equals("Harvester (" + owner + ")")) {
+					return "bridge rename gave " + drone.getCustomName().getString();
+				}
+				ItemStack tag = new ItemStack(Items.NAME_TAG);
+				tag.set(DataComponents.CUSTOM_NAME, Component.literal("Miner"));
+				player.setItemInHand(InteractionHand.MAIN_HAND, tag);
+				drone.interact(player, InteractionHand.MAIN_HAND, drone.position());
+				player.setItemInHand(InteractionHand.MAIN_HAND, ItemStack.EMPTY);
+				return drone.getCustomName().getString().equals("Miner (" + owner + ")") ? "" : "name tag rename gave " + drone.getCustomName().getString();
+			});
+			check(nameProblem.isEmpty(), nameProblem);
+
+			// tiers: a second drone, crafted as iron, joins the player's drones
+			// then a charging station beside the active drone becomes its home
+			int[] station = world.getServer().computeOnServer(server -> {
+				ServerPlayer player = server.getPlayerList().getPlayers().getFirst();
+				DroneEntity drone = Drones.active(player);
+				DroneEntity iron = DroneItem.spawnFor(player.level(), player, drone.position().add(0, 2, 0), 0.0F, DroneTier.IRON);
+				boolean tiered = iron.tier() == DroneTier.IRON && iron.getItem().is(ModContent.droneItem(DroneTier.IRON)) && Drones.owned(player).size() >= 2;
+				iron.discard();
+				if (!tiered) {
+					return null;
+				}
+				BlockPos pos = BlockPos.containing(drone.position()).offset(4, -1, 0);
+				player.level().setBlock(pos, ModContent.CHARGING_STATION.defaultBlockState(), Block.UPDATE_ALL);
+				player.level().setBlock(pos.above(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+				player.level().setBlock(pos.above(2), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+				drone.setHome(pos);
+				return new int[] {pos.getX(), pos.getY(), pos.getZ()};
+			});
+			check(station != null, "an iron drone didn't come out as iron");
+
+			// return_home flies the drone onto its station, the flight drains the battery
+			JsonObject home = msg("reset");
+			home.addProperty("id", id);
+			JsonObject homeOptions = new JsonObject();
+			homeOptions.addProperty("task", "return_home");
+			home.add("options", homeOptions);
+			bridge.send(home);
+			obs = awaitObs(ctx, bridge, id++);
+			JsonObject homeState = obs.header().getAsJsonObject("state");
+			check(homeState.getAsJsonObject("job").get("kind").getAsString().equals("return_home"), "expected a return_home job, got " + homeState.get("job"));
+			check(homeState.getAsJsonObject("battery").get("home").equals(ints(station)), "battery home " + homeState.getAsJsonObject("battery").get("home"));
+			double flownFrom = homeState.getAsJsonObject("battery").get("charge").getAsDouble();
+			boolean docked = false;
+			for (int i = 0; i < 300 && !docked; i++) {
+				JsonObject step = msg("step");
+				step.addProperty("id", id);
+				step.add("action", dockAction(obs.header().getAsJsonObject("state"), station));
+				bridge.send(step);
+				obs = awaitObs(ctx, bridge, id++);
+				docked = obs.header().getAsJsonObject("episode").get("success").getAsBoolean();
+			}
+			check(docked, "return_home never docked, drone at " + obs.header().getAsJsonObject("state").get("pos"));
+			JsonObject dockedBattery = obs.header().getAsJsonObject("state").getAsJsonObject("battery");
+			check(dockedBattery.get("docked").getAsBoolean(), "the episode ended but the drone isn't docked");
+			check(dockedBattery.get("charge").getAsDouble() < flownFrom, "flying home didn't use any charge, " + flownFrom + " to " + dockedBattery.get("charge"));
+
+			// docked, every pose charges, lockstep freezes server ticks so poses drive the battery.
+			// Poses without a tool request don't wait for the server, so let it catch up to the docked pose first
+			for (int i = 0; i < 100 && !world.getServer().computeOnServer(server -> Drones.active(server.getPlayerList().getPlayers().getFirst()).docked()); i++) {
+				ctx.waitTick();
+			}
+			String chargeProblem = world.getServer().computeOnServer(server -> {
+				DroneEntity drone = Drones.active(server.getPlayerList().getPlayers().getFirst());
+				for (int i = 0; i < 50; i++) {
+					drone.spendBreak();
+				}
+				float before = drone.charge();
+				for (int i = 0; i < 100; i++) {
+					drone.onPose(drone.getX(), drone.getY(), drone.getZ(), drone.getYRot(), drone.getXRot());
+				}
+				return drone.charge() > before ? "" : "docked poses didn't charge, " + before + " to " + drone.charge() + ", drone at " + drone.position()
+					+ ", home " + drone.home() + " holds " + drone.level().getBlockState(drone.home()) + ", docked " + drone.docked();
+			});
+			check(chargeProblem.isEmpty(), chargeProblem);
+
+			// a queued job keeps its label, the dashboard sees it, and Run queue starts it and takes it off the queue
+			JsonObject queued = new JsonObject();
+			queued.addProperty("task", "return_home");
+			String queueProblem = ctx.computeOnClient(mc -> runtime.queueJob(queued));
+			check(queueProblem == null, "queueing failed: " + queueProblem);
+			ctx.waitFor(mc -> runtime.controller().drone() != null && runtime.controller().drone().queue().size() == 1, 100);
+			JsonArray drones = ctx.computeOnClient(mc -> runtime.statusJson().getAsJsonArray("drones"));
+			boolean listed = false;
+			for (var d : drones) {
+				JsonArray queue = d.getAsJsonObject().getAsJsonArray("queue");
+				listed |= queue.size() == 1 && queue.get(0).getAsJsonObject().get("label").getAsString().equals("return home");
+			}
+			check(listed, "the status doesn't list the queued job: " + drones);
+			String runProblem = ctx.computeOnClient(mc -> runtime.runQueue());
+			check(runProblem == null, "Run queue failed: " + runProblem);
+			ctx.waitFor(mc -> runtime.controller().drone().queue().isEmpty() && runtime.task().active() && runtime.task().kind() == TaskKind.RETURN_HOME, 200);
+			ctx.takeScreenshot("mcdrone-docked");
 
 			JsonObject release = msg("release");
 			bridge.send(release);
@@ -409,6 +522,28 @@ public class DroneClientGameTest implements FabricClientGameTest {
 			}
 		}
 		return total;
+	}
+
+	// flies to a little above the station's top, slowing as it closes in so it stops inside the dock
+	private static JsonObject dockAction(JsonObject state, int[] station) {
+		JsonArray pos = state.getAsJsonArray("pos");
+		double dx = station[0] + 0.5 - pos.get(0).getAsDouble();
+		double dy = station[1] + 1.3 - pos.get(1).getAsDouble();
+		double dz = station[2] + 0.5 - pos.get(2).getAsDouble();
+		double yaw = Math.toRadians(state.get("yaw").getAsDouble());
+		double forward = dx * -Math.sin(yaw) + dz * Math.cos(yaw);
+		double right = dx * -Math.cos(yaw) + dz * -Math.sin(yaw);
+		JsonObject action = new JsonObject();
+		JsonArray move = new JsonArray();
+		move.add(Math.max(-1.0, Math.min(1.0, forward)));
+		move.add(Math.max(-1.0, Math.min(1.0, right)));
+		move.add(Math.max(-1.0, Math.min(1.0, dy)));
+		JsonArray look = new JsonArray();
+		look.add(0.0);
+		look.add(0.0);
+		action.add("move", move);
+		action.add("look", look);
+		return action;
 	}
 
 	private static JsonObject scriptedAction(JsonObject state) {

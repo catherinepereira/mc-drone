@@ -3,11 +3,12 @@ import { ConfigView } from "./components/ConfigView";
 import { EpisodesView } from "./components/EpisodesView";
 import { LiveView } from "./components/LiveView";
 import { LogsView } from "./components/LogsView";
+import { MapView } from "./components/MapView";
 import { MetricsView } from "./components/MetricsView";
 import { Pill } from "./components/ui";
 import { useBridge } from "./stores/bridge";
 
-const TABS = ["Live", "Episodes", "Logs", "Metrics", "Config"] as const;
+const TABS = ["Live", "Map", "Episodes", "Logs", "Metrics", "Config"] as const;
 type Tab = (typeof TABS)[number];
 
 function readTab(): Tab {
@@ -92,6 +93,7 @@ export function App() {
           </p>
         )}
         {tab === "Live" && <LiveView />}
+        {tab === "Map" && <MapView />}
         {tab === "Episodes" && <EpisodesView />}
         {tab === "Logs" && <LogsView />}
         {tab === "Metrics" && <MetricsView />}

@@ -58,6 +58,7 @@ interface BridgeState {
     patch: Partial<Record<"cornerA" | "cornerB" | "dest", Vec3 | null>>,
   ) => void;
   exportSchematic: (name: string) => void;
+  renameDrone: (name: string) => void;
   saveRegion: (name: string, purpose: RegionPurpose) => void;
   deleteRegion: (id: string) => void;
   selectRegion: (id: string) => void;
@@ -254,6 +255,7 @@ export const useBridge = create<BridgeState>((set, get) => ({
   pilot: (on) => send({ type: "pilot", on }),
   select: (patch) => send({ type: "select", ...patch }),
   exportSchematic: (name) => send({ type: "export", name }),
+  renameDrone: (name) => send({ type: "rename", name }),
   saveRegion: (name, purpose) => send({ type: "region_save", name, purpose }),
   deleteRegion: (region) => send({ type: "region_delete", region }),
   selectRegion: (region) => send({ type: "region_use", region }),

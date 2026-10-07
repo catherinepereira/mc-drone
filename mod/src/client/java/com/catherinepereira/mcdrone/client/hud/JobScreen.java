@@ -18,7 +18,7 @@ import org.jspecify.annotations.Nullable;
 /**
  * Pick a job for the drone: an action, the regions it works with, and what it needs (a block, a schematic).
  * A copy takes three: the region to copy, where to paste it, and optionally a region to mine its materials from first.
- * Each is the remote selection or any saved region. The lower row saves the selection as a named region
+ * Each is the tablet selection or any saved region. The lower row saves the selection as a named region
  */
 public final class JobScreen extends Screen {
 	private static final int W = 300;
@@ -27,7 +27,7 @@ public final class JobScreen extends Screen {
 	private static final int BORDER = 0xFFDDE3EC;
 	private static final int TEXT = 0xFF1F2933;
 	private static final int MUTED = 0xFF6B7785;
-	// the remote selection in the region pickers, and no gather region
+	// the tablet selection in the region pickers, and no gather region
 	private static final String SELECTION = "";
 	private static final String NONE = "";
 
@@ -134,7 +134,7 @@ public final class JobScreen extends Screen {
 			box.setHint(Component.literal(switch (this.action) {
 				case BUILD -> "schematic file, such as house.schem";
 				case HARVEST -> "crop, such as wheat";
-				default -> "block, such as minecraft:coal_ore";
+				default -> "blocks, such as coal_ore, iron_ore";
 			}));
 			box.setValue(this.subject);
 			box.setResponder(v -> this.subject = v);
@@ -142,8 +142,10 @@ public final class JobScreen extends Screen {
 			y = this.nextRow(y);
 		}
 
-		this.addRenderableWidget(Button.builder(Component.literal("Start job"), b -> this.start()).bounds(this.left, y, W / 2 - 2, 20).build());
-		this.addRenderableWidget(Button.builder(Component.literal("Close"), b -> this.onClose()).bounds(this.left + W / 2 + 2, y, W / 2 - 2, 20).build());
+		int third = (W - 8) / 3;
+		this.addRenderableWidget(Button.builder(Component.literal("Start job"), b -> this.start(false)).bounds(this.left, y, third, 20).build());
+		this.addRenderableWidget(Button.builder(Component.literal("Add to queue"), b -> this.start(true)).bounds(this.left + third + 4, y, third, 20).build());
+		this.addRenderableWidget(Button.builder(Component.literal("Close"), b -> this.onClose()).bounds(this.left + 2 * (third + 4), y, third, 20).build());
 		y = this.nextRow(y) + 22;
 
 		EditBox name = new EditBox(this.font, this.left, y, 140, 20, Component.literal("region name"));
@@ -171,7 +173,7 @@ public final class JobScreen extends Screen {
 			return Component.literal(this.savedLabel(name));
 		}
 		BlockPos size = this.runtime.selection.size();
-		return Component.literal(size == null ? "remote selection (none yet)" : "remote selection, " + size.getX() + "x" + size.getY() + "x" + size.getZ());
+		return Component.literal(size == null ? "tablet selection (none yet)" : "tablet selection, " + size.getX() + "x" + size.getY() + "x" + size.getZ());
 	}
 
 	private Component destLabel(String name) {
@@ -179,7 +181,7 @@ public final class JobScreen extends Screen {
 			return Component.literal(this.savedLabel(name) + ", its low corner");
 		}
 		BlockPos dest = this.runtime.selection.dest;
-		return Component.literal(dest == null ? "remote paste point (none yet)" : "remote paste point " + dest.toShortString());
+		return Component.literal(dest == null ? "tablet paste point (none yet)" : "tablet paste point " + dest.toShortString());
 	}
 
 	private Component gatherLabel(String name) {
@@ -201,7 +203,7 @@ public final class JobScreen extends Screen {
 		return name;
 	}
 
-	private void start() {
+	private void start(boolean queue) {
 		JsonObject options = new JsonObject();
 		options.addProperty("task", this.action.task);
 		if (this.action != Action.BUILD && !this.region.equals(SELECTION)) {
@@ -219,13 +221,20 @@ public final class JobScreen extends Screen {
 			options.addProperty("schematic", this.subject.endsWith(".schem") ? this.subject.trim() : this.subject.trim() + ".schem");
 		} else if (this.action != Action.COPY) {
 			String name = this.subject.trim();
-			options.addProperty(this.action == Action.MINE ? "block" : "crop", name.contains(":") ? name : "minecraft:" + name);
+			if (this.action == Action.MINE) {
+				// names without a namespace are minecraft's, the server reads the list
+				options.addProperty("blocks", name);
+			} else {
+				options.addProperty("crop", name.contains(":") ? name : "minecraft:" + name);
+			}
 		}
-		String problem = this.runtime.startJob(options);
-		if (problem == null) {
-			this.onClose();
-		} else {
+		String problem = queue ? this.runtime.queueJob(options) : this.runtime.startJob(options);
+		if (problem != null) {
 			this.message = problem;
+		} else if (queue) {
+			this.message = "Queued, it runs after the current job or from Run queue";
+		} else {
+			this.onClose();
 		}
 	}
 
@@ -251,7 +260,7 @@ public final class JobScreen extends Screen {
 		super.extractRenderState(g, mouseX, mouseY, a);
 		g.text(this.font, "Drone jobs", this.left, this.top + 4, TEXT, false);
 		int y = this.top + 22 + this.rows * ROW + 6;
-		g.text(this.font, "Save the remote selection as a region", this.left, y, MUTED, false);
+		g.text(this.font, "Save the tablet selection as a region", this.left, y, MUTED, false);
 		String hint = this.message != null ? this.message : this.hint();
 		g.text(this.font, hint, this.left, y + ROW + 18, this.message != null ? TEXT : MUTED, false);
 	}
@@ -260,7 +269,7 @@ public final class JobScreen extends Screen {
 		return switch (this.action) {
 			case COPY -> this.gather.equals(NONE) ? "Uses the drone's own blocks, leaves the source" : "Mines its blocks first, leaves the source";
 			case BUILD -> this.gather.equals(NONE) ? "Uses the drone's own blocks" : "Mines its blocks first, then builds";
-			case MINE -> "The drone only breaks blocks inside the region";
+			case MINE -> "Mines every block of those kinds, only inside the region";
 			case HARVEST -> "Ripe crops come out, and every empty farmland cell gets replanted";
 		};
 	}

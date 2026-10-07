@@ -53,8 +53,10 @@ export function ControlPanel() {
     act,
     record,
     pilot,
+    renameDrone,
     latest,
   } = useBridge();
+  const [droneName, setDroneName] = useState("");
   const [task, setTask] = useState("navigate_to");
   const [terrain, setTerrain] = useState("flat");
   const [targets, setTargets] = useState(1);
@@ -245,6 +247,21 @@ export function ControlPanel() {
           <Button onClick={() => pilot(!status?.piloting)}>
             {status?.piloting ? "Camera to player" : "Camera to drone"}
           </Button>
+        </div>
+
+        <div className="flex items-end gap-2">
+          <div className="flex-1">
+            <Field label="Drone name, shown as name (owner)">
+              <input
+                className={inputClass}
+                placeholder="Harvester"
+                maxLength={32}
+                value={droneName}
+                onChange={(e) => setDroneName(e.target.value)}
+              />
+            </Field>
+          </div>
+          <Button onClick={() => renameDrone(droneName)}>Rename</Button>
         </div>
 
         <div className="border-border bg-sunken flex flex-col gap-2 rounded-md border p-3">

@@ -47,6 +47,8 @@ export interface DroneState {
   vel?: Vec3;
   yaw?: number;
   pitch?: number;
+  tier?: string;
+  battery?: Battery;
   lookingAt?: { block: string; pos: Vec3; dist: number } | null;
   marker?: Vec3 | null;
   collided?: boolean;
@@ -89,6 +91,41 @@ export interface Status {
   episode: EpisodeInfo | null;
   selection?: Selection;
   regions?: Region[];
+  drones?: DroneInfo[];
+}
+
+/** A queued job: the options it starts with and what the tablet calls it */
+export interface QueuedJob {
+  task: string;
+  label?: string;
+  [option: string]: unknown;
+}
+
+/** One of the player's loaded drones, charge runs 0 to 1 */
+export interface DroneInfo {
+  id: number;
+  name: string;
+  tier: "copper" | "iron" | "diamond";
+  active: boolean;
+  pos: Vec3;
+  charge: number;
+  battery: boolean;
+  home: Vec3 | null;
+  docked: boolean;
+  queue: QueuedJob[];
+}
+
+/** What the drone knows of its battery, costs are charge per tick or per block broken */
+export interface Battery {
+  enabled: boolean;
+  charge: number;
+  home: Vec3 | null;
+  docked: boolean;
+  reserve: number;
+  flightPerTick: number;
+  hoverShare: number;
+  breakCost: number;
+  chargePerTick: number;
 }
 
 /** One belief change in the drone's voxel memory */
@@ -119,7 +156,7 @@ export interface Region {
   box: [number, number, number, number, number, number];
 }
 
-/** The player's copy selection, set with the drone remote or the dashboard */
+/** The player's copy selection, set with the tablet or the dashboard */
 export interface Selection {
   cornerA: Vec3 | null;
   cornerB: Vec3 | null;
@@ -130,7 +167,7 @@ export interface Selection {
 
 /** The drone's instruction for a copy or build job, inclusive min and max corners */
 export interface Job {
-  kind: "copy" | "build";
+  kind: "copy" | "build" | "mine" | "harvest" | "return_home";
   source?: [number, number, number, number, number, number];
   schematic?: string;
   dest: [number, number, number, number, number, number];

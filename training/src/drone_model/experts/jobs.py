@@ -12,6 +12,7 @@ from pathlib import Path
 
 import numpy as np
 
+from ..energy import fly_home
 from ..perception.memory import AIR, MIN_VOTES, Cell, VoxelMemory
 from ..perception.reader import CLASSES, INDEX, OTHER, SKY
 from .tools import (
@@ -40,6 +41,13 @@ TRENCH_PERIOD = 4
 # the camera this far above a block it breaks from above, or this far out from a side it breaks through
 DIG_HEIGHT = 2.2
 DIG_SIDE = 1.8
+# how far the camera leans off a cell it digs from above, along each horizontal axis
+LEANS = ((0.6, 0.0), (-0.6, 0.0), (0.0, 0.6), (0.0, -0.6))
+# the drone's half width and height in blocks, its hitbox is 0.6 by 0.4
+DRONE_HALF = 0.3
+DRONE_HEIGHT = 0.4
+# with nothing else left, cells given up on get this many more tries
+RETRIES = 2
 # the face of the support block that faces the cell, by the direction from the cell to the support
 FACES = {(0, -1, 0): "up", (1, 0, 0): "west", (-1, 0, 0): "east", (0, 0, 1): "north", (0, 0, -1): "south", (0, 1, 0): "down"}
 
@@ -127,6 +135,7 @@ class JobPlanner(HonestExpert):
         self.target_cell: tuple[int, int, int] | None = None
         self.target_block: str | None = None
         self.trenches: dict[tuple, list[tuple[int, int, int]]] = {}
+        self.retries = 0
 
     def load_scans(self, job: dict) -> None:
         """
@@ -195,6 +204,16 @@ class JobPlanner(HonestExpert):
     def idle(self) -> dict:
         return tool_action([0, 0, 0, 0, 0])
 
+    def retry_given_up(self) -> bool:
+        """With nothing else left, gives the cells given up on another try, the digging since may have opened a way in"""
+        if not self.unreachable or self.retries >= RETRIES:
+            return False
+        self.retries += 1
+        self.unreachable.clear()
+        self.target_cell = None
+        self.working_on = None
+        return True
+
     def note_breaks(self, state: dict) -> None:
         for event in state.get("events", []):
             if event.get("type") == "break":
@@ -239,25 +258,44 @@ class JobPlanner(HonestExpert):
     def dig(self, state: dict, cell, expect: str | None, box=None) -> dict:
         """
         Break cell through a face that is open, with the camera in front of it.
-        A cell with no open face inside box gets a shaft dug down to it first
+        Inside box a face only counts when the drone can get to it, otherwise a shaft gets dug down to the cell first
         """
         c = center(cell)
 
         def open_side(n) -> bool:
+            if box is None:
+                return self.empty(n)
             # above the top of the box is open air for digging, even before the camera has seen it
-            return self.empty(n) or (box is not None and n[1] > box[4])
+            if n[1] > box[4]:
+                return True
+            if not self.empty(n):
+                return False
+            if not (box[0] <= n[0] <= box[3] and box[2] <= n[2] <= box[5]):
+                return True
+            # a pocket under solid blocks is open but the camera can't get into it, the column above has to be clear
+            return all(self.empty((n[0], y, n[2])) for y in range(n[1] + 1, box[4] + 1))
 
         if box is not None and not any(open_side(n) for n in neighbors(cell)):
             blocker = self.shaft_blocker(cell, box)
             if blocker is not None and blocker != cell:
+                if blocker in self.unreachable:
+                    # the shaft can't go on, so neither can the dig it was for
+                    self.unreachable.add(cell)
+                    return self.idle()
                 return self.dig(state, blocker, None, box)
         for d in ((0, 1, 0), (1, 0, 0), (-1, 0, 0), (0, 0, 1), (0, 0, -1)):
             if not open_side((cell[0] + d[0], cell[1] + d[1], cell[2] + d[2])):
                 continue
             if d[1] == 1:
-                # from above, leaning along x so a trench's walls stay out of the way
-                lean = 0.6 if state["pos"][0] >= c[0] else -0.6
-                via = (c[0] + lean, c[1] + DIG_HEIGHT, c[2])
+                # from above, leaning a little so the camera isn't straight over the cell, toward whichever side has
+                # room for the drone, nearest to it first. With no room on any side it looks straight down
+                leans = sorted(LEANS, key=lambda d: math.dist((c[0] + d[0], c[2] + d[1]), (state["pos"][0], state["pos"][2])))
+                via = (c[0], c[1] + DIG_HEIGHT, c[2])
+                for dx, dz in leans:
+                    candidate = (c[0] + dx, c[1] + DIG_HEIGHT, c[2] + dz)
+                    if self.body_clear(candidate, box):
+                        via = candidate
+                        break
             else:
                 # only as far out as the open cells go, a two-wide trench has a wall right behind
                 room = 1 + int(self.empty((cell[0] + 2 * d[0], cell[1], cell[2] + 2 * d[2])))
@@ -266,6 +304,14 @@ class JobPlanner(HonestExpert):
             point = (c[0] + d[0] * 0.49, c[1] + d[1] * 0.49, c[2] + d[2] * 0.49)
             return self.work_on(state, cell, "break", standoff=0.0, hover=0.0, point=point, expect=expect, via=via)
         return self.work_on(state, cell, "break", standoff=2.5, hover=0.9, expect=expect)
+
+    def body_clear(self, eye, box) -> bool:
+        """Whether the drone fits with its camera at eye: the cells its body spans are empty, or above box where it digs"""
+        cells = {
+            (math.floor(eye[0] + ox), math.floor(eye[1] + oy), math.floor(eye[2] + oz))
+            for ox in (-DRONE_HALF, DRONE_HALF) for oz in (-DRONE_HALF, DRONE_HALF) for oy in (-VIA_EYE, DRONE_HEIGHT - VIA_EYE)
+        }
+        return all(self.empty(cell) or (box is not None and cell[1] > box[4]) for cell in cells)
 
     def close_views(self, cells, box) -> list[tuple[tuple, tuple]]:
         """Up to two close views of each cell, from above or from sides that face open air"""
@@ -585,7 +631,7 @@ class BuildPlanner(JobPlanner):
         visible = [c for c, label in self.memory.box(lo, hi).items() if base_name(label) in need and c not in self.unreachable]
         cell = self.committed(state, visible)
         if cell is not None:
-            return self.dig(state, cell, self.target_block)
+            return self.dig(state, cell, self.target_block, box)
         cell = self.next_dig(state, box)
         if cell is not None:
             # every trench block comes out whatever it is, a misread mustn't make the drone give up on it
@@ -600,7 +646,7 @@ class BuildPlanner(JobPlanner):
 
 class MinePlanner(JobPlanner):
     """
-    Mine jobs: looks the region over and breaks every block of the kind it can see there. With none in sight it digs
+    Mine jobs: looks the region over and breaks every block of the job's kinds it can see there. With none in sight it digs
     trenches through the region, which uncovers buried ones, and breaks those as they come into view
     """
 
@@ -611,24 +657,28 @@ class MinePlanner(JobPlanner):
 
     def decide(self, state: dict) -> dict:
         job = state["job"]
+        blocks = set(job["blocks"])
         self.note_breaks(state)
         self.load_scans(job)
         if "region" in self.scanned_boxes:
-            # the scan knows every block of the kind, buried or not, any block the game has
-            cell = self.committed(state, self.scanned_in(job["region"], {job["block"]}))
-            return self.dig(state, cell, job["block"], job["region"]) if cell is not None else self.idle()
-        if job["block"] not in INDEX:
-            raise ValueError(f"the block reader doesn't know {job['block']}, it can't find it to mine")
+            # the scan knows every block of the kinds, buried or not, any block the game has
+            cell = self.committed(state, self.scanned_in(job["region"], blocks))
+            if cell is None and self.retry_given_up():
+                cell = self.committed(state, self.scanned_in(job["region"], blocks))
+            return self.dig(state, cell, self.scanned[cell], job["region"]) if cell is not None else self.idle()
+        unknown = sorted(blocks - set(INDEX))
+        if unknown:
+            raise ValueError(f"the block reader doesn't know {', '.join(unknown)}, it can't find them to mine")
         if self.views is None:
             self.start_survey(state, job["region"])
         if self.views:
             return self.survey(state)
         lo, hi = job["region"][:3], job["region"][3:]
-        targets = [c for c, label in self.memory.box(lo, hi).items() if base_name(label) == job["block"] and c not in self.unreachable]
+        targets = [c for c, label in self.memory.box(lo, hi).items() if base_name(label) in blocks and c not in self.unreachable]
         cell = self.committed(state, targets)
         if cell is not None:
             self.empty_surveys = 0
-            return self.dig(state, cell, job["block"])
+            return self.dig(state, cell, self.target_block, job["region"])
         cell = self.next_dig(state, job["region"])
         if cell is not None:
             # every trench block comes out whatever it is, a misread mustn't make the drone give up on it
@@ -644,11 +694,16 @@ class MinePlanner(JobPlanner):
             self.views = self.close_views(walls, box)
             if self.views:
                 return self.survey(state)
-        # the reader can take buried ore for stone, dig what had a fair share of votes for the block before giving up
-        doubtful = [c for c in self.region_cells(job["region"]) if not self.empty(c) and c not in self.unreachable and self.share(c, job["block"]) >= DOUBT_SHARE]
+        # the reader can take buried ore for stone, dig what had a fair share of votes for a kind before giving up
+        doubtful = [
+            c for c in self.region_cells(job["region"])
+            if not self.empty(c) and c not in self.unreachable and max(self.share(c, b) for b in blocks) >= DOUBT_SHARE
+        ]
         if doubtful:
-            return self.dig(state, self.stick(state, doubtful), None)
+            return self.dig(state, self.stick(state, doubtful), None, job["region"])
         if self.empty_surveys >= 2:
+            if self.retry_given_up():
+                self.empty_surveys = 0
             return self.idle()
         self.empty_surveys += 1
         self.views = None
@@ -708,7 +763,16 @@ class HarvestPlanner(HarvestExpert):
         return tool_action([0, 0, 0, 0, 0])
 
 
+class DockPlanner(HonestExpert):
+    """Flies back to the charging station, the job ends once the drone docks on it"""
+
+    def decide(self, state: dict) -> dict:
+        return fly_home(self, state, state["job"]["station"])
+
+
 def make_planner(job: dict, mask_ids: dict, reader, schematics: Path | None = None) -> HonestExpert:
+    if job["kind"] == "return_home":
+        return DockPlanner(mask_ids, reader=reader)
     if job["kind"] in ("copy", "build"):
         return BuildPlanner(mask_ids, reader=reader, schematics=schematics)
     if job["kind"] == "mine":

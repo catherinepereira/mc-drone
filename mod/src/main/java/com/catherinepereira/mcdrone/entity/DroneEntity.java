@@ -1,13 +1,19 @@
 package com.catherinepereira.mcdrone.entity;
 
+import com.catherinepereira.mcdrone.Json;
 import com.catherinepereira.mcdrone.ModContent;
-import java.util.UUID;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.network.chat.Component;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.network.syncher.SynchedEntityData;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.ContainerHelper;
+import net.minecraft.world.Containers;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.SimpleContainer;
@@ -19,10 +25,12 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.projectile.ItemSupplier;
 import net.minecraft.world.inventory.ChestMenu;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.storage.ValueInput;
 import net.minecraft.world.level.storage.ValueOutput;
 import net.minecraft.world.phys.Vec3;
+import java.util.Optional;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -31,8 +39,22 @@ import org.jspecify.annotations.Nullable;
  */
 public class DroneEntity extends Entity implements ItemSupplier {
 	private static final EntityDataAccessor<String> OWNER = SynchedEntityData.defineId(DroneEntity.class, EntityDataSerializers.STRING);
+	private static final EntityDataAccessor<Integer> TIER = SynchedEntityData.defineId(DroneEntity.class, EntityDataSerializers.INT);
+	// battery charge from 0 to 1, see BatteryConfig
+	private static final EntityDataAccessor<Float> CHARGE = SynchedEntityData.defineId(DroneEntity.class, EntityDataSerializers.FLOAT);
+	// the charging station it goes back to, set by using the tablet on a station
+	private static final EntityDataAccessor<Optional<BlockPos>> HOME = SynchedEntityData.defineId(DroneEntity.class, EntityDataSerializers.OPTIONAL_BLOCK_POS);
+	// jobs waiting to run, a JSON array of job options with a "label", see ClientRuntime.queueJob
+	private static final EntityDataAccessor<String> QUEUE = SynchedEntityData.defineId(DroneEntity.class, EntityDataSerializers.STRING);
+	public static final int MAX_QUEUE = 16;
+	// ticks the motors stay on after the drone last moved or broke a block, idle drones don't draw power
+	private static final int POWERED_TICKS = 100;
+	// a drone this close above its station's top is docked and charges
+	private static final double DOCK_REACH = 1.5;
 
 	public static final int INVENTORY_SIZE = 27;
+	public static final String DEFAULT_NAME = "Drone";
+	public static final int MAX_NAME = 32;
 
 	// set by the owning client while it drives this drone, makes the client ignore server position echoes
 	public boolean clientControlled;
@@ -48,6 +70,15 @@ public class DroneEntity extends Entity implements ItemSupplier {
 	public @Nullable BlockPos openContainer;
 	public @Nullable BlockPos breakingPos;
 	public float breakProgress;
+	// shown over the drone as "name (owner)", see refreshNameTag
+	private String name = DEFAULT_NAME;
+	private String ownerName = "";
+	private @Nullable Vec3 lastPos;
+	private int poweredFor;
+	// a pose arrived since the last server tick, the pose already ran the battery for that tick
+	private boolean posed;
+	// set while it flies a training arena, where the battery stays out of the way, player jobs clear it
+	public boolean trainingArena;
 
 	public DroneEntity(EntityType<? extends DroneEntity> type, Level level) {
 		super(type, level);
@@ -57,10 +88,113 @@ public class DroneEntity extends Entity implements ItemSupplier {
 	@Override
 	protected void defineSynchedData(SynchedEntityData.Builder builder) {
 		builder.define(OWNER, "");
+		builder.define(TIER, DroneTier.COPPER.ordinal());
+		builder.define(CHARGE, 1.0F);
+		builder.define(HOME, Optional.empty());
+		builder.define(QUEUE, "[]");
 	}
 
-	public void setOwner(UUID owner) {
-		this.entityData.set(OWNER, owner.toString());
+	public void setOwner(Player owner) {
+		this.entityData.set(OWNER, owner.getUUID().toString());
+		this.ownerName = owner.getName().getString();
+		this.refreshNameTag();
+	}
+
+	/** Names the drone, a blank name puts back the default */
+	public void rename(String name) {
+		String trimmed = name.strip();
+		this.name = trimmed.isEmpty() ? DEFAULT_NAME : trimmed.substring(0, Math.min(trimmed.length(), MAX_NAME));
+		this.refreshNameTag();
+	}
+
+	public String name() {
+		return this.name;
+	}
+
+	/** The name without its owner, on either side, the client only has the synced nametag "name (owner)" */
+	public String shownName() {
+		if (!this.level().isClientSide()) {
+			return this.name;
+		}
+		return this.getCustomName() == null ? DEFAULT_NAME : this.getCustomName().getString().replaceFirst(" \\([^()]*\\)$", "");
+	}
+
+	// vanilla draws a visible custom name over the drone, and the chest screen uses it as its title
+	private void refreshNameTag() {
+		this.setCustomName(Component.literal(this.ownerName.isEmpty() ? this.name : this.name + " (" + this.ownerName + ")"));
+		this.setCustomNameVisible(true);
+	}
+
+	public DroneTier tier() {
+		return DroneTier.byOrdinal(this.entityData.get(TIER));
+	}
+
+	public void setTier(DroneTier tier) {
+		this.entityData.set(TIER, tier.ordinal());
+	}
+
+	public float charge() {
+		return this.entityData.get(CHARGE);
+	}
+
+	/** Out of charge with the battery on, the drone can't fly or use tools */
+	public boolean flat() {
+		return BatteryConfig.get().enabled && !this.trainingArena && this.charge() <= 0.0F;
+	}
+
+	public @Nullable BlockPos home() {
+		return this.entityData.get(HOME).orElse(null);
+	}
+
+	public void setHome(@Nullable BlockPos home) {
+		this.entityData.set(HOME, Optional.ofNullable(home).map(BlockPos::immutable));
+	}
+
+	public void recharge() {
+		this.entityData.set(CHARGE, 1.0F);
+	}
+
+	/** Spends charge for a block broken */
+	public void spendBreak() {
+		this.poweredFor = POWERED_TICKS;
+		this.spend(BatteryConfig.get().breakCost());
+	}
+
+	private void spend(double amount) {
+		if (BatteryConfig.get().enabled && !this.trainingArena) {
+			this.entityData.set(CHARGE, (float) Math.clamp(this.charge() - amount, 0.0, 1.0));
+		}
+	}
+
+	public JsonArray queue() {
+		try {
+			return JsonParser.parseString(this.entityData.get(QUEUE)).getAsJsonArray();
+		} catch (RuntimeException e) {
+			return new JsonArray();
+		}
+	}
+
+	public void setQueue(JsonArray queue) {
+		this.entityData.set(QUEUE, queue.toString());
+	}
+
+	/** On its station, where it charges */
+	public boolean docked() {
+		BlockPos home = this.home();
+		if (home == null || !this.level().getBlockState(home).is(ModContent.CHARGING_STATION)) {
+			return false;
+		}
+		Vec3 top = Vec3.atBottomCenterOf(home.above());
+		return Math.abs(this.getX() - top.x) < 0.6 && Math.abs(this.getZ() - top.z) < 0.6 && this.getY() >= top.y - 0.1 && this.getY() <= top.y + DOCK_REACH;
+	}
+
+	/** The charge, the home station, and the battery's settings, for the drone's state */
+	public JsonObject batteryJson() {
+		JsonObject json = BatteryConfig.get().toJson();
+		json.addProperty("charge", this.charge());
+		json.add("home", Json.pos(this.home()));
+		json.addProperty("docked", this.docked());
+		return json;
 	}
 
 	public boolean isOwnedBy(Player player) {
@@ -77,9 +211,43 @@ public class DroneEntity extends Entity implements ItemSupplier {
 		return true;
 	}
 
+	/**
+	 * A pose from the owner's client, one simulated tick of flight. Lockstep freezes the server's ticks, so the battery runs
+	 * on poses while a client flies the drone and on server ticks otherwise
+	 */
+	public void onPose(double x, double y, double z, float yaw, float pitch) {
+		this.snapTo(x, y, z, yaw, pitch);
+		this.posed = true;
+		this.batteryTick();
+	}
+
 	@Override
 	public void tick() {
 		this.baseTick();
+		if (this.level().isClientSide()) {
+			return;
+		}
+		if (this.posed) {
+			this.posed = false;
+		} else {
+			this.batteryTick();
+		}
+	}
+
+	private void batteryTick() {
+		BatteryConfig battery = BatteryConfig.get();
+		Vec3 pos = this.position();
+		boolean moved = this.lastPos != null && pos.distanceToSqr(this.lastPos) > 1e-4;
+		this.lastPos = pos;
+		if (moved) {
+			this.poweredFor = POWERED_TICKS;
+		}
+		if (this.docked()) {
+			this.entityData.set(CHARGE, (float) Math.min(1.0, this.charge() + battery.chargePerTick()));
+		} else if (this.poweredFor > 0) {
+			this.poweredFor--;
+			this.spend(moved ? battery.flightPerTick() : battery.flightPerTick() * battery.hoverShare);
+		}
 	}
 
 	@Override
@@ -94,6 +262,28 @@ public class DroneEntity extends Entity implements ItemSupplier {
 
 	@Override
 	public InteractionResult interact(Player player, InteractionHand hand, Vec3 location) {
+		ItemStack held = player.getItemInHand(hand);
+		if (held.isEmpty() && player.isSecondaryUseActive() && this.isOwnedBy(player)) {
+			// sneaking with an empty hand picks the drone back up, its cargo drops like a broken chest's
+			if (this.level() instanceof ServerLevel level) {
+				Containers.dropContents(level, this, this.inventory);
+				ItemStack item = new ItemStack(ModContent.droneItem(this.tier()));
+				if (!player.getInventory().add(item)) {
+					this.spawnAtLocation(level, item);
+				}
+				this.discard();
+			}
+			return InteractionResult.SUCCESS;
+		}
+		Component tagName = held.is(Items.NAME_TAG) ? held.get(DataComponents.CUSTOM_NAME) : null;
+		if (tagName != null && this.isOwnedBy(player)) {
+			// a named name tag renames the drone, like a mob
+			if (player.level() instanceof ServerLevel) {
+				this.rename(tagName.getString());
+				held.consume(1, player);
+			}
+			return InteractionResult.SUCCESS;
+		}
 		if (player.level() instanceof ServerLevel) {
 			player.openMenu(new SimpleMenuProvider((id, playerInventory, p) -> ChestMenu.threeRows(id, playerInventory, this.inventory), this.getDisplayName()));
 		}
@@ -102,12 +292,18 @@ public class DroneEntity extends Entity implements ItemSupplier {
 
 	@Override
 	public ItemStack getItem() {
-		return new ItemStack(ModContent.DRONE_ITEM);
+		return new ItemStack(ModContent.droneItem(this.tier()));
 	}
 
 	@Override
 	protected void readAdditionalSaveData(ValueInput input) {
 		this.entityData.set(OWNER, input.getStringOr("owner", ""));
+		this.ownerName = input.getStringOr("ownerName", "");
+		this.rename(input.getStringOr("name", DEFAULT_NAME));
+		this.setTier(DroneTier.parse(input.getStringOr("tier", DroneTier.COPPER.id)));
+		this.entityData.set(CHARGE, (float) input.getDoubleOr("charge", 1.0));
+		this.setHome(input.getLong("home").map(BlockPos::of).orElse(null));
+		this.entityData.set(QUEUE, input.getStringOr("queue", "[]"));
 		this.inventory.clearContent();
 		ContainerHelper.loadAllItems(input, this.inventory.getItems());
 	}
@@ -115,6 +311,14 @@ public class DroneEntity extends Entity implements ItemSupplier {
 	@Override
 	protected void addAdditionalSaveData(ValueOutput output) {
 		output.putString("owner", this.entityData.get(OWNER));
+		output.putString("ownerName", this.ownerName);
+		output.putString("name", this.name);
+		output.putString("tier", this.tier().id);
+		output.putDouble("charge", this.charge());
+		output.putString("queue", this.entityData.get(QUEUE));
+		if (this.home() != null) {
+			output.putLong("home", this.home().asLong());
+		}
 		ContainerHelper.saveAllItems(output, this.inventory.getItems());
 	}
 }

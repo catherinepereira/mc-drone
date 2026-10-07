@@ -1,8 +1,9 @@
 package com.catherinepereira.mcdrone.client;
 
 import com.catherinepereira.mcdrone.Json;
-import com.catherinepereira.mcdrone.RemoteInput;
+import com.catherinepereira.mcdrone.TabletInput;
 import com.catherinepereira.mcdrone.ModContent;
+import com.catherinepereira.mcdrone.entity.BatteryConfig;
 import com.catherinepereira.mcdrone.entity.DroneEntity;
 import com.catherinepereira.mcdrone.client.bridge.BridgeServer;
 import com.catherinepereira.mcdrone.client.bridge.Session;
@@ -11,11 +12,14 @@ import com.catherinepereira.mcdrone.client.obs.Observation;
 import com.catherinepereira.mcdrone.client.obs.Raycaster;
 import com.catherinepereira.mcdrone.client.record.Recorder;
 import com.catherinepereira.mcdrone.client.task.TaskScorer;
+import com.catherinepereira.mcdrone.net.DroneQueuePayload;
 import com.catherinepereira.mcdrone.net.DroneSyncPayload;
 import com.catherinepereira.mcdrone.net.DroneToolPayload;
 import com.catherinepereira.mcdrone.net.ExportSchematicPayload;
 import com.catherinepereira.mcdrone.net.ResetTaskPayload;
 import com.catherinepereira.mcdrone.net.RegionEditPayload;
+import com.catherinepereira.mcdrone.net.RenameDronePayload;
+import com.catherinepereira.mcdrone.net.SelectDronePayload;
 import com.catherinepereira.mcdrone.net.SetFrozenPayload;
 import com.catherinepereira.mcdrone.net.TaskReadyPayload;
 import com.catherinepereira.mcdrone.task.TaskKind;
@@ -23,6 +27,7 @@ import com.catherinepereira.mcdrone.tool.DroneTool;
 import com.catherinepereira.mcdrone.tool.ToolRequest;
 import com.catherinepereira.mcdrone.client.hud.DroneScreen;
 import com.catherinepereira.mcdrone.client.hud.JobScreen;
+import com.catherinepereira.mcdrone.client.hud.TabletScreen;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
@@ -49,6 +54,7 @@ import net.minecraft.client.CameraType;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
@@ -99,6 +105,11 @@ public final class ClientRuntime {
 
 	private @Nullable PendingReset pendingReset;
 	private int resetRequestSeq;
+	// the job that just ended, the next tick starts the drone's next queued job or sends it home
+	private @Nullable TaskKind finishedJob;
+	private boolean finishedJobSucceeded;
+	// the drones part of the last status, a change sends a new status
+	private JsonArray lastDrones = new JsonArray();
 
 	private final List<Consumer<Observation>> captureListeners = new ArrayList<>();
 	// set while the next frame renders from the third-person camera for the chase stream
@@ -264,8 +275,8 @@ public final class ClientRuntime {
 		this.startReset(this.seeds.nextLong() & 0xFFFFFFFFL, new JsonObject(), null, null);
 	}
 
-	/** A click with the drone remote */
-	public void select(RemoteInput.Target target, BlockPos pos) {
+	/** A click with the tablet */
+	public void select(TabletInput.Target target, BlockPos pos) {
 		switch (target) {
 			case CORNER_A -> this.selection.cornerA = pos;
 			case CORNER_B -> this.selection.cornerB = pos;
@@ -300,7 +311,7 @@ public final class ClientRuntime {
 	/** Saves the selection's source box as a named region */
 	public @Nullable String saveRegion(String name, String purpose) {
 		if (this.selection.size() == null) {
-			return "select both corners with the drone remote first";
+			return "select both corners with the tablet first";
 		}
 		JsonObject edit = new JsonObject();
 		edit.addProperty("op", "put");
@@ -353,6 +364,22 @@ public final class ClientRuntime {
 		this.mc.gui.setScreen(new JobScreen(this));
 	}
 
+	public void openTablet() {
+		this.mc.gui.setScreen(new TabletScreen(this));
+	}
+
+	/** Makes drone the one jobs, piloting, and the bridge use, here and on the server */
+	public void selectDrone(DroneEntity drone) {
+		this.controller.adopt(drone);
+		if (this.controller.piloting()) {
+			this.mc.setCameraEntity(drone);
+		}
+		if (ClientPlayNetworking.canSend(SelectDronePayload.TYPE)) {
+			ClientPlayNetworking.send(new SelectDronePayload(drone.getId()));
+		}
+		this.broadcastStatus();
+	}
+
 	/** Starts a job from the job screen, returning why it can't start or null */
 	public @Nullable String startJob(JsonObject options) {
 		TaskKind kind = TaskKind.parse(options.get("task").getAsString());
@@ -366,6 +393,117 @@ public final class ClientRuntime {
 		}
 		this.startReset(this.seeds.nextLong() & 0xFFFFFFFFL, options, null, null);
 		return null;
+	}
+
+	/**
+	 * Adds a job to the active drone's queue. The tablet selection is copied into the job now, so changing it later
+	 * doesn't move queued work. Returns why the job can't be queued, or null
+	 */
+	public @Nullable String queueJob(JsonObject options) {
+		DroneEntity drone = this.controller.drone();
+		if (drone == null || !ClientPlayNetworking.canSend(DroneQueuePayload.TYPE)) {
+			return "pick a drone on the tablet first";
+		}
+		TaskKind kind = TaskKind.parse(options.get("task").getAsString());
+		String subject = jobSubject(options);
+		String problem = this.jobRegion(kind, options.deepCopy(), subject);
+		if (problem != null) {
+			return problem;
+		}
+		JsonObject job = options.deepCopy();
+		job.addProperty("label", jobLabel(kind, options, subject));
+		if (!job.has("region") && (kind == TaskKind.COPY_REGION || kind == TaskKind.MINE_REGION || kind == TaskKind.HARVEST_REGION)) {
+			job.add("source", Json.box(this.selection.cornerA, this.selection.cornerB));
+		}
+		if (!job.has("dest") && (kind == TaskKind.COPY_REGION || kind == TaskKind.BUILD_SCHEMATIC)) {
+			job.add("dest", Json.pos(this.selection.dest));
+		}
+		JsonObject edit = new JsonObject();
+		edit.addProperty("op", "add");
+		edit.add("job", job);
+		ClientPlayNetworking.send(new DroneQueuePayload(drone.getId(), edit.toString()));
+		return null;
+	}
+
+	/** Drops one queued job of the active drone, or all of them for a negative index */
+	public void removeQueued(int index) {
+		DroneEntity drone = this.controller.drone();
+		if (drone == null || !ClientPlayNetworking.canSend(DroneQueuePayload.TYPE)) {
+			return;
+		}
+		JsonObject edit = new JsonObject();
+		edit.addProperty("op", index < 0 ? "clear" : "remove");
+		edit.addProperty("index", index);
+		ClientPlayNetworking.send(new DroneQueuePayload(drone.getId(), edit.toString()));
+	}
+
+	/** Starts the active drone's first queued job, returning why it can't or null */
+	public @Nullable String runQueue() {
+		DroneEntity drone = this.controller.drone();
+		JsonArray queue = drone == null ? new JsonArray() : drone.queue();
+		if (queue.isEmpty()) {
+			return "the queue is empty";
+		}
+		if (this.pendingReset != null || (this.task.active() && this.task.kind().isJob())) {
+			return "a job is running, the queue continues after it";
+		}
+		String problem = this.startJob(queue.get(0).getAsJsonObject());
+		if (problem == null) {
+			this.removeQueued(0);
+		}
+		return problem;
+	}
+
+	public @Nullable String sendHome() {
+		JsonObject options = new JsonObject();
+		options.addProperty("task", TaskKind.RETURN_HOME.id);
+		return this.startJob(options);
+	}
+
+	// "mine coal_ore, iron_ore in quarry", what the tablet and the dashboard show for a queued job
+	private static String jobLabel(TaskKind kind, JsonObject options, String subject) {
+		String region = savedName(options, "region", "the selection");
+		String dest = savedName(options, "dest", "the paste point");
+		String what = subject.replace("minecraft:", "").replace(",", ", ");
+		return switch (kind) {
+			case COPY_REGION -> "copy " + region + " to " + dest;
+			case BUILD_SCHEMATIC -> "build " + what + " at " + dest;
+			case MINE_REGION -> "mine " + what + " in " + region;
+			case HARVEST_REGION -> "harvest " + what + " in " + region;
+			case RETURN_HOME -> "return home";
+			default -> kind.id;
+		};
+	}
+
+	private static String savedName(JsonObject options, String key, String otherwise) {
+		return options.has(key) && options.get(key).isJsonPrimitive() ? options.get(key).getAsString() : otherwise;
+	}
+
+	// after a job the next queued one starts, and with nothing left, or after a failure, the drone flies home to charge.
+	// Only with a controller connected, the brain flies jobs
+	private void advanceQueue() {
+		TaskKind finished = this.finishedJob;
+		if (finished == null || this.pendingReset != null) {
+			return;
+		}
+		this.finishedJob = null;
+		DroneEntity drone = this.controller.drone();
+		if (this.controllerSession == null || drone == null || finished == TaskKind.RETURN_HOME) {
+			return;
+		}
+		JsonArray queue = drone.queue();
+		if (this.finishedJobSucceeded && !queue.isEmpty()) {
+			String problem = this.runQueue();
+			if (problem == null) {
+				return;
+			}
+			this.toast("Queued job skipped: " + problem);
+		} else if (!queue.isEmpty()) {
+			this.toast("The job stopped, " + queue.size() + " queued jobs wait, run them from the tablet");
+		}
+		if (drone.home() != null && !drone.docked()) {
+			this.sendHome();
+		}
 	}
 
 	public void startCopyFromKeyboard() {
@@ -399,9 +537,9 @@ public final class ClientRuntime {
 			due.forEach(e -> e.getValue().run());
 		}
 		if (this.tick % 10 == 0 && this.mc.level != null && this.mc.player != null
-			&& (this.mc.player.getMainHandItem().is(ModContent.REMOTE) || (this.task.active() && this.task.kind().isJob()))) {
+			&& (this.mc.player.getMainHandItem().is(ModContent.TABLET) || (this.task.active() && this.task.kind().isJob()))) {
 			this.selection.outline(this.mc.level);
-			if (this.mc.player.getMainHandItem().is(ModContent.REMOTE)) {
+			if (this.mc.player.getMainHandItem().is(ModContent.TABLET)) {
 				this.outlineRegions();
 			}
 		}
@@ -415,6 +553,9 @@ public final class ClientRuntime {
 					s.send(metrics);
 				}
 			}
+			if (!this.dronesJson().equals(this.lastDrones)) {
+				this.broadcastStatus();
+			}
 		}
 
 		if (this.mc.level == null || this.mc.player == null) {
@@ -422,6 +563,7 @@ public final class ClientRuntime {
 		}
 		this.controller.validate();
 		this.advanceReset();
+		this.advanceQueue();
 
 		if (this.autoResetIn > 0 && --this.autoResetIn == 0) {
 			this.autoResetIn = -1;
@@ -486,6 +628,9 @@ public final class ClientRuntime {
 			DroneEntity drone = this.controller.drone();
 			if (drone != null) {
 				this.task.update(drone.getBoundingBox().getCenter(), collided, this::isTargetBlock);
+				if (this.task.active() && this.task.kind() == TaskKind.RETURN_HOME && drone.docked()) {
+					this.task.complete();
+				}
 			}
 			if (this.task.done()) {
 				break;
@@ -566,6 +711,10 @@ public final class ClientRuntime {
 		JsonObject snap = this.task.snapshot();
 		this.log.info("task.done", snap);
 		this.task.end();
+		if (this.task.kind().isJob()) {
+			this.finishedJob = this.task.kind();
+			this.finishedJobSucceeded = snap.has("success") && snap.get("success").getAsBoolean();
+		}
 		// keyboard demos chain episodes so a pilot can record many in a row
 		if (this.recorder.armed() && this.controllerSession == null) {
 			this.autoResetIn = this.config.autoResetTicks;
@@ -605,7 +754,7 @@ public final class ClientRuntime {
 	public void onFrameRendered(Camera camera) {
 		if (this.chaseListener != null) {
 			// the readback callback that asked for the chase view can land after this frame's camera was set up, so wait
-			// for a frame actually rendered from the third-person camera
+			// for a frame rendered from the third-person camera
 			if (!camera.isDetached() && this.chaseWaitFrames++ < 5) {
 				return;
 			}
@@ -792,9 +941,14 @@ public final class ClientRuntime {
 
 	private int[] jobRegionInts = new int[0];
 
-	// the schematic for a build job, the block for a mine job, the crop for a harvest job
+	// the schematic for a build job, the blocks for a mine job (a list, or names separated by commas), the crop for a harvest job
 	private static String jobSubject(JsonObject options) {
-		for (String key : new String[] {"schematic", "block", "crop"}) {
+		if (options.has("blocks") && options.get("blocks").isJsonArray()) {
+			List<String> names = new ArrayList<>();
+			options.getAsJsonArray("blocks").forEach(e -> names.add(e.getAsString()));
+			return String.join(",", names);
+		}
+		for (String key : new String[] {"schematic", "blocks", "block", "crop"}) {
 			if (options.has(key)) {
 				return options.get(key).getAsString();
 			}
@@ -803,10 +957,15 @@ public final class ClientRuntime {
 	}
 
 	/**
-	 * Fills jobRegionInts from the options ("source" as 6 ints and "dest" as 3), falling back to the remote selection.
+	 * Fills jobRegionInts from the options ("source" as 6 ints and "dest" as 3), falling back to the tablet selection.
 	 * Returns why the job can't start, or null
 	 */
 	private @Nullable String jobRegion(TaskKind kind, JsonObject options, String subject) {
+		if (kind == TaskKind.RETURN_HOME) {
+			// the server knows the drone's station
+			this.jobRegionInts = new int[9];
+			return null;
+		}
 		Selection sel = new Selection();
 		sel.cornerA = this.selection.cornerA;
 		sel.cornerB = this.selection.cornerB;
@@ -866,7 +1025,7 @@ public final class ClientRuntime {
 		}
 		if (kind == TaskKind.MINE_REGION || kind == TaskKind.HARVEST_REGION) {
 			if (subject.isEmpty()) {
-				return kind == TaskKind.MINE_REGION ? "mine_region needs a block, such as minecraft:coal_ore" : "harvest_region needs a crop, such as minecraft:wheat";
+				return kind == TaskKind.MINE_REGION ? "mine_region needs blocks, such as coal_ore, iron_ore" : "harvest_region needs a crop, such as minecraft:wheat";
 			}
 			if (sel.size() == null) {
 				return "select the region to mine, or name a saved one";
@@ -921,7 +1080,7 @@ public final class ClientRuntime {
 			case HARVEST_CROPS -> 1500;
 			case COPY_BUILD, SCHEMATIC_BUILD, MINE_DEPOSIT, GATHER_BUILD -> 20000;
 			// a job runs until it's done or stopped, sized for the largest 16x16x16 builds
-			case COPY_REGION, BUILD_SCHEMATIC, MINE_REGION, HARVEST_REGION -> 100000;
+			case COPY_REGION, BUILD_SCHEMATIC, MINE_REGION, HARVEST_REGION, RETURN_HOME -> 100000;
 		};
 	}
 
@@ -1095,6 +1254,13 @@ public final class ClientRuntime {
 				}
 				ClientPlayNetworking.send(new ExportSchematicPayload(this.selection.cornerA, this.selection.cornerB, name.endsWith(".schem") ? name : name + ".schem"));
 			}
+			case "rename" -> {
+				if (!ClientPlayNetworking.canSend(RenameDronePayload.TYPE)) {
+					session.error("not in a world", id);
+					return;
+				}
+				ClientPlayNetworking.send(new RenameDronePayload(msg.has("name") ? msg.get("name").getAsString() : ""));
+			}
 			case "configure", "act", "step", "reset", "record", "pilot", "release" -> {
 				if (!isController) {
 					session.error(type + " needs the controller role", id);
@@ -1265,7 +1431,38 @@ public final class ClientRuntime {
 		json.add("episode", this.task.episodeId() == null ? JsonNull.INSTANCE : this.task.snapshot());
 		json.add("selection", this.selection.toJson());
 		json.add("regions", this.regions);
+		this.lastDrones = this.dronesJson();
+		json.add("drones", this.lastDrones);
 		return json;
+	}
+
+	/** The player's loaded drones with their battery and job queue, for the dashboard */
+	private JsonArray dronesJson() {
+		JsonArray out = new JsonArray();
+		if (this.mc.level == null || this.mc.player == null) {
+			return out;
+		}
+		for (Entity e : this.mc.level.entitiesForRendering()) {
+			if (e instanceof DroneEntity drone && drone.isOwnedBy(this.mc.player)) {
+				JsonObject json = new JsonObject();
+				json.addProperty("id", drone.getId());
+				json.addProperty("name", drone.shownName());
+				json.addProperty("tier", drone.tier().id);
+				json.addProperty("active", drone.getId() == this.controller.droneId());
+				JsonArray pos = new JsonArray();
+				pos.add(Math.round(drone.getX() * 10) / 10.0);
+				pos.add(Math.round(drone.getY() * 10) / 10.0);
+				pos.add(Math.round(drone.getZ() * 10) / 10.0);
+				json.add("pos", pos);
+				json.addProperty("charge", Math.round(drone.charge() * 1000) / 1000.0);
+				json.addProperty("battery", BatteryConfig.get().enabled);
+				json.add("home", Json.pos(drone.home()));
+				json.addProperty("docked", drone.docked());
+				json.add("queue", drone.queue());
+				out.add(json);
+			}
+		}
+		return out;
 	}
 
 	public void broadcastStatus() {
@@ -1285,6 +1482,8 @@ public final class ClientRuntime {
 		}
 		json.add("pos", vec(drone.position()));
 		json.add("vel", vec(this.controller.velocity()));
+		json.addProperty("tier", drone.tier().id);
+		json.add("battery", drone.batteryJson());
 		json.addProperty("yaw", drone.getYRot());
 		json.addProperty("pitch", drone.getXRot());
 		Vec3 eye = drone.getEyePosition();

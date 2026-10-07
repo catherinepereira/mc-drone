@@ -2,6 +2,7 @@ package com.catherinepereira.mcdrone.net;
 
 import com.catherinepereira.mcdrone.McDrone;
 import com.catherinepereira.mcdrone.entity.DroneEntity;
+import com.catherinepereira.mcdrone.entity.Drones;
 import com.catherinepereira.mcdrone.task.Arena;
 import com.catherinepereira.mcdrone.task.BuildJob;
 import com.catherinepereira.mcdrone.task.Region;
@@ -38,6 +39,9 @@ public final class ModNetworking {
 		PayloadTypeRegistry.serverboundPlay().register(DroneToolPayload.TYPE, DroneToolPayload.CODEC);
 		PayloadTypeRegistry.serverboundPlay().register(ExportSchematicPayload.TYPE, ExportSchematicPayload.CODEC);
 		PayloadTypeRegistry.serverboundPlay().register(RegionEditPayload.TYPE, RegionEditPayload.CODEC);
+		PayloadTypeRegistry.serverboundPlay().register(RenameDronePayload.TYPE, RenameDronePayload.CODEC);
+		PayloadTypeRegistry.serverboundPlay().register(SelectDronePayload.TYPE, SelectDronePayload.CODEC);
+		PayloadTypeRegistry.serverboundPlay().register(DroneQueuePayload.TYPE, DroneQueuePayload.CODEC);
 		PayloadTypeRegistry.clientboundPlay().register(RegionsPayload.TYPE, RegionsPayload.CODEC);
 
 		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) ->
@@ -79,7 +83,7 @@ public final class ModNetworking {
 			ServerPlayer player = context.player();
 			Entity entity = player.level().getEntity(payload.entityId());
 			if (isHost(context.server(), player) && entity instanceof DroneEntity drone && drone.isOwnedBy(player)) {
-				drone.snapTo(payload.x(), payload.y(), payload.z(), payload.yaw(), payload.pitch());
+				drone.onPose(payload.x(), payload.y(), payload.z(), payload.yaw(), payload.pitch());
 			}
 		});
 
@@ -130,6 +134,57 @@ public final class ModNetworking {
 				result = "Export failed: " + e.getMessage();
 			}
 			player.sendOverlayMessage(Component.literal(result));
+		});
+
+		ServerPlayNetworking.registerGlobalReceiver(RenameDronePayload.TYPE, (payload, context) -> {
+			ServerPlayer player = context.player();
+			DroneEntity drone = Drones.active(player);
+			if (drone != null) {
+				drone.rename(payload.name());
+			}
+		});
+
+		ServerPlayNetworking.registerGlobalReceiver(DroneQueuePayload.TYPE, (payload, context) -> {
+			ServerPlayer player = context.player();
+			if (!(player.level().getEntity(payload.droneId()) instanceof DroneEntity drone) || !drone.isOwnedBy(player)) {
+				return;
+			}
+			JsonObject edit;
+			try {
+				edit = JsonParser.parseString(payload.edit()).getAsJsonObject();
+			} catch (RuntimeException e) {
+				return;
+			}
+			JsonArray queue = drone.queue();
+			switch (edit.has("op") ? edit.get("op").getAsString() : "") {
+				case "add" -> {
+					if (queue.size() >= DroneEntity.MAX_QUEUE) {
+						player.sendOverlayMessage(Component.literal("The queue is full, " + DroneEntity.MAX_QUEUE + " jobs at most"));
+						return;
+					}
+					if (edit.has("job") && edit.get("job").isJsonObject()) {
+						queue.add(edit.getAsJsonObject("job"));
+					}
+				}
+				case "remove" -> {
+					int index = edit.has("index") ? edit.get("index").getAsInt() : -1;
+					if (index >= 0 && index < queue.size()) {
+						queue.remove(index);
+					}
+				}
+				case "clear" -> queue = new JsonArray();
+				default -> {
+					return;
+				}
+			}
+			drone.setQueue(queue);
+		});
+
+		ServerPlayNetworking.registerGlobalReceiver(SelectDronePayload.TYPE, (payload, context) -> {
+			ServerPlayer player = context.player();
+			if (player.level().getEntity(payload.droneId()) instanceof DroneEntity drone && drone.isOwnedBy(player)) {
+				Drones.setActive(player, drone);
+			}
 		});
 
 		ServerPlayNetworking.registerGlobalReceiver(SetFrozenPayload.TYPE, (payload, context) -> {

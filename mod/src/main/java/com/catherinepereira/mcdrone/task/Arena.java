@@ -3,6 +3,8 @@ package com.catherinepereira.mcdrone.task;
 import com.catherinepereira.mcdrone.ModContent;
 import com.catherinepereira.mcdrone.entity.DroneEntity;
 import com.catherinepereira.mcdrone.entity.DroneItem;
+import com.catherinepereira.mcdrone.entity.DroneTier;
+import com.catherinepereira.mcdrone.entity.Drones;
 import com.catherinepereira.mcdrone.net.ResetTaskPayload;
 import com.catherinepereira.mcdrone.net.TaskReadyPayload;
 import java.io.IOException;
@@ -209,11 +211,14 @@ public final class Arena {
 
 		parkPlayer(level, player, ox, floorY, oz);
 
-		DroneEntity drone = level.getEntities(ModContent.DRONE, d -> d.isOwnedBy(player)).stream().findFirst().orElse(null);
+		DroneEntity drone = Drones.active(player);
 		if (drone == null) {
-			drone = DroneItem.spawnFor(level, player, spawn, yaw);
+			drone = DroneItem.spawnFor(level, player, spawn, yaw, DroneTier.COPPER);
 		}
 		drone.snapTo(spawn.x, spawn.y, spawn.z, yaw, 0.0F);
+		// arenas hand out a full drone, a player job may have run it down
+		drone.trainingArena = true;
+		drone.recharge();
 		drone.inventory.clearContent();
 		drone.openContainer = null;
 		drone.breakingPos = null;
@@ -300,7 +305,7 @@ public final class Arena {
 	}
 
 	/**
-	 * A copy, build, mine, or harvest job in the player's own world: nothing is built or cleared, the drone keeps its inventory, and
+	 * A copy, build, mine, harvest, or return-home job in the player's own world: nothing is built or cleared, the drone keeps its inventory, and
 	 * the player stays put. Every box has to be within JOB_REACH of the player, which keeps it in loaded chunks
 	 */
 	private static TaskReadyPayload startJob(ServerPlayer player, ResetTaskPayload req, TaskKind kind) {
@@ -312,7 +317,14 @@ public final class Arena {
 		BlockPos a = new BlockPos(r[0], r[1], r[2]);
 		BlockPos b = new BlockPos(r[3], r[4], r[5]);
 		BlockPos dest = new BlockPos(r[6], r[7], r[8]);
+		DroneEntity drone = Drones.active(player);
 		DroneJob job = switch (kind) {
+			case RETURN_HOME -> {
+				if (drone == null || drone.home() == null) {
+					throw new IllegalArgumentException("the drone has no charging station, right click one with the tablet");
+				}
+				yield new DockJob(drone.home());
+			}
 			case COPY_REGION -> BuildJob.copy(level, a, b, dest);
 			case BUILD_SCHEMATIC -> {
 				Path file = schematicFile(req.subject());
@@ -334,17 +346,16 @@ public final class Arena {
 		}
 		BlockPos[] corners = job.corners();
 		for (BlockPos corner : corners) {
-			if (corner.distManhattan(player.blockPosition()) > JOB_REACH * 2 || Math.abs(corner.getX() - player.getBlockX()) > JOB_REACH
-				|| Math.abs(corner.getZ() - player.getBlockZ()) > JOB_REACH) {
+			if (!inReach(player, corner)) {
 				throw new IllegalArgumentException("the job reaches " + corner.toShortString() + ", more than " + JOB_REACH + " blocks from you");
 			}
 		}
 
-		DroneEntity drone = level.getEntities(ModContent.DRONE, d -> d.isOwnedBy(player)).stream().findFirst().orElse(null);
 		Vec3 start = drone != null ? drone.position() : player.getEyePosition().add(0, 1.0, 0);
 		if (drone == null) {
-			drone = DroneItem.spawnFor(level, player, start, player.getYRot());
+			drone = DroneItem.spawnFor(level, player, start, player.getYRot(), DroneTier.COPPER);
 		}
+		drone.trainingArena = false;
 
 		// the geofence: the job's boxes and where the drone starts, plus room to fly around and over them
 		BlockPos lo = BlockPos.containing(start);
@@ -352,6 +363,12 @@ public final class Arena {
 		for (BlockPos c : corners) {
 			lo = BlockPos.min(lo, c);
 			hi = BlockPos.max(hi, c);
+		}
+		// the home station too, so the drone can fly back to charge mid-job
+		BlockPos home = drone.home();
+		if (home != null && inReach(player, home)) {
+			lo = BlockPos.min(lo, home);
+			hi = BlockPos.max(hi, home.above());
 		}
 		ArenaRecord record = new ArenaRecord(kind, corners[0], 0);
 		record.job = job;
@@ -363,6 +380,11 @@ public final class Arena {
 		return new TaskReadyPayload(
 			req.requestId(), drone.getId(), corners[0], corners[0], start.x, start.y, start.z, drone.getYRot(), record.toJson().toString(), ""
 		);
+	}
+
+	private static boolean inReach(ServerPlayer player, BlockPos pos) {
+		return pos.distManhattan(player.blockPosition()) <= JOB_REACH * 2 && Math.abs(pos.getX() - player.getBlockX()) <= JOB_REACH
+			&& Math.abs(pos.getZ() - player.getBlockZ()) <= JOB_REACH;
 	}
 
 	/**

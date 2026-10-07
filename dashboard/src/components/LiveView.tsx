@@ -2,6 +2,7 @@ import { useBridge } from "../stores/bridge";
 import { fixed, vec } from "../utils/format";
 import { ArenaMap } from "./ArenaMap";
 import { ControlPanel } from "./ControlPanel";
+import { DronesPanel } from "./DronesPanel";
 import { InventoryPanel } from "./InventoryPanel";
 import { JobsPanel } from "./JobsPanel";
 import { MemoryPanel } from "./MemoryPanel";
@@ -85,6 +86,7 @@ export function LiveView() {
 
       <div className="flex flex-col gap-4">
         <ControlPanel />
+        <DronesPanel />
         <JobsPanel />
         <RegionsPanel />
         <Card title="Drone">

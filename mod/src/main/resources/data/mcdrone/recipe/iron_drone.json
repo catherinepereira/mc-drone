@@ -1,0 +1,17 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "equipment",
+  "key": {
+    "M": "minecraft:iron_ingot",
+    "R": "minecraft:redstone_block",
+    "C": "minecraft:chest"
+  },
+  "pattern": [
+    "M M",
+    " R ",
+    "MCM"
+  ],
+  "result": {
+    "id": "mcdrone:iron_drone"
+  }
+}

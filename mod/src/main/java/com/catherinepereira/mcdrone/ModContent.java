@@ -1,7 +1,9 @@
 package com.catherinepereira.mcdrone;
 
 import com.catherinepereira.mcdrone.entity.DroneEntity;
+import com.catherinepereira.mcdrone.entity.BatteryConfig;
 import com.catherinepereira.mcdrone.entity.DroneItem;
+import com.catherinepereira.mcdrone.entity.DroneTier;
 import net.fabricmc.fabric.api.creativetab.v1.CreativeModeTabEvents;
 import net.minecraft.core.Registry;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -30,9 +32,18 @@ public final class ModContent {
 			.build(DRONE_KEY)
 	);
 
-	public static final Item DRONE_ITEM = registerItem("drone", DroneItem::new, new Item.Properties().stacksTo(1));
-	// selects copy regions, see RemoteInput
-	public static final Item REMOTE = registerItem("remote", Item::new, new Item.Properties().stacksTo(1));
+	public static final Item COPPER_DRONE = registerItem("copper_drone", p -> new DroneItem(p, DroneTier.COPPER), new Item.Properties().stacksTo(1));
+	public static final Item IRON_DRONE = registerItem("iron_drone", p -> new DroneItem(p, DroneTier.IRON), new Item.Properties().stacksTo(1));
+	public static final Item DIAMOND_DRONE = registerItem("diamond_drone", p -> new DroneItem(p, DroneTier.DIAMOND), new Item.Properties().stacksTo(1));
+	// lists the player's drones and selects regions for their jobs, see TabletInput
+	public static final Item TABLET = registerItem("tablet", Item::new, new Item.Properties().stacksTo(1));
+
+	// a drone assigned to a station charges sitting on top of it
+	public static final Block CHARGING_STATION = registerBlock(
+		"charging_station",
+		BlockBehaviour.Properties.of().mapColor(MapColor.COLOR_ORANGE).strength(3.0F, 6.0F).requiresCorrectToolForDrops().sound(SoundType.COPPER).lightLevel(state -> 7)
+	);
+	public static final Item CHARGING_STATION_ITEM = registerItem("charging_station", p -> new BlockItem(CHARGING_STATION, p), new Item.Properties().useBlockDescriptionPrefix());
 
 	// emissive so the marker reads the same in any light
 	public static final Block MARKER = registerBlock(
@@ -44,11 +55,23 @@ public final class ModContent {
 	private ModContent() {
 	}
 
+	public static Item droneItem(DroneTier tier) {
+		return switch (tier) {
+			case COPPER -> COPPER_DRONE;
+			case IRON -> IRON_DRONE;
+			case DIAMOND -> DIAMOND_DRONE;
+		};
+	}
+
 	public static void register() {
-		RemoteInput.register();
+		TabletInput.register();
+		BatteryConfig.load();
 		CreativeModeTabEvents.modifyOutputEvent(CreativeModeTabs.TOOLS_AND_UTILITIES).register(output -> {
-			output.accept(DRONE_ITEM);
-			output.accept(REMOTE);
+			output.accept(COPPER_DRONE);
+			output.accept(IRON_DRONE);
+			output.accept(DIAMOND_DRONE);
+			output.accept(TABLET);
+			output.accept(CHARGING_STATION_ITEM);
 			output.accept(MARKER_ITEM);
 		});
 	}

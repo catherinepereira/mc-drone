@@ -2,6 +2,7 @@ package com.catherinepereira.mcdrone.client.render;
 
 import com.catherinepereira.mcdrone.McDrone;
 import com.catherinepereira.mcdrone.entity.DroneEntity;
+import com.catherinepereira.mcdrone.entity.DroneTier;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.math.Axis;
 import net.minecraft.client.model.EntityModel;
@@ -17,7 +18,6 @@ import net.minecraft.util.Mth;
 /** Draws the drone with DroneModel, leaning into its motion the way a quadcopter tilts to fly */
 public final class DroneRenderer extends EntityRenderer<DroneEntity, DroneRenderState> {
 	public static final ModelLayerLocation LAYER = new ModelLayerLocation(McDrone.id("drone"), "main");
-	private static final Identifier TEXTURE = McDrone.id("textures/entity/drone.png");
 	private static final float SCALE = 0.9F;
 	// degrees of lean per block per tick of speed, and the most it leans
 	private static final float LEAN_PER_SPEED = 40.0F;
@@ -31,6 +31,10 @@ public final class DroneRenderer extends EntityRenderer<DroneEntity, DroneRender
 		this.shadowRadius = 0.3F;
 	}
 
+	private static Identifier texture(DroneTier tier) {
+		return McDrone.id("textures/entity/" + tier.id + "_drone.png");
+	}
+
 	@Override
 	public DroneRenderState createRenderState() {
 		return new DroneRenderState();
@@ -39,6 +43,7 @@ public final class DroneRenderer extends EntityRenderer<DroneEntity, DroneRender
 	@Override
 	public void extractRenderState(DroneEntity entity, DroneRenderState state, float partialTicks) {
 		super.extractRenderState(entity, state, partialTicks);
+		state.tier = entity.tier();
 		state.yRot = entity.getYRot(partialTicks);
 		state.cameraPitch = entity.getXRot(partialTicks);
 		double dx = entity.getX() - entity.xo;
@@ -61,7 +66,7 @@ public final class DroneRenderer extends EntityRenderer<DroneEntity, DroneRender
 		poseStack.translate(0.0F, -0.15F, 0.0F);
 		poseStack.scale(-SCALE, -SCALE, SCALE);
 		poseStack.translate(0.0F, EntityModel.MODEL_Y_OFFSET, 0.0F);
-		collector.submitModel(this.model, state, poseStack, TEXTURE, state.lightCoords, OverlayTexture.NO_OVERLAY, state.outlineColor);
+		collector.submitModel(this.model, state, poseStack, texture(state.tier), state.lightCoords, OverlayTexture.NO_OVERLAY, state.outlineColor);
 		poseStack.popPose();
 		super.submit(state, poseStack, collector, camera);
 	}

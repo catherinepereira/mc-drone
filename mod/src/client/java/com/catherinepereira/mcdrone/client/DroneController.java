@@ -23,6 +23,8 @@ public final class DroneController {
 	private boolean piloting;
 	private DroneAction lastAction = DroneAction.ZERO;
 	private boolean lastCollided;
+	// blocks per tick a drone with a flat battery sinks
+	private static final double FLAT_SINK = 0.08;
 
 	public DroneController(Minecraft mc, Config config) {
 		this.mc = mc;
@@ -140,6 +142,10 @@ public final class DroneController {
 			action.up() * this.config.maxVerticalSpeed,
 			(fz * action.forward() + rz * action.right()) * this.config.maxSpeed
 		);
+		if (drone.flat()) {
+			// out of charge, the rotors spin down and it sinks to the ground wherever it is
+			target = new Vec3(0.0, -FLAT_SINK, 0.0);
+		}
 		this.velocity = this.velocity.add(target.subtract(this.velocity).scale(this.config.smoothing));
 
 		drone.setYRot(yaw);
