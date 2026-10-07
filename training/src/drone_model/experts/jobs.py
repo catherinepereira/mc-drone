@@ -136,6 +136,8 @@ class JobPlanner(HonestExpert):
         self.target_block: str | None = None
         self.trenches: dict[tuple, list[tuple[int, int, int]]] = {}
         self.retries = 0
+        # blocks the drone's tier breaks without a drop, the server lists them with the job
+        self.unharvestable: frozenset[str] = frozenset()
 
     def load_scans(self, job: dict) -> None:
         """
@@ -144,6 +146,7 @@ class JobPlanner(HonestExpert):
         """
         if self.scanned_boxes is not None:
             return
+        self.unharvestable = frozenset(job.get("unharvestable", ()))
         self.scanned_boxes = set()
         for key, cells in read_scans(job, self.schematics).items():
             for cell, block in cells.items():
@@ -201,6 +204,11 @@ class JobPlanner(HonestExpert):
     def believed(self, cell) -> str:
         return base_name(self.memory.label(cell))
 
+    def wasted(self, cell) -> bool:
+        """Whether breaking cell would destroy a block the drone gets nothing from, by its exact scanned name or its read"""
+        name = self.scanned[cell] if cell in self.scanned and cell not in self.dug else self.believed(cell)
+        return name in self.unharvestable
+
     def idle(self) -> dict:
         return tool_action([0, 0, 0, 0, 0])
 
@@ -233,7 +241,7 @@ class JobPlanner(HonestExpert):
             x0, y0, z0, x1, y1, z1 = box
             zs = [z for z in range(z0, z1 + 1) if (z - z0) % TRENCH_PERIOD < TRENCH_WIDTH]
             self.trenches[key] = [(x, y, z) for y in range(y1, y0 - 1, -1) for z in zs for x in range(x0, x1 + 1)]
-        left = [c for c in self.trenches[key] if not self.empty(c) and c not in self.unreachable]
+        left = [c for c in self.trenches[key] if not self.empty(c) and c not in self.unreachable and not self.wasted(c)]
         if not left:
             return None
         top = max(c[1] for c in left)
@@ -278,7 +286,7 @@ class JobPlanner(HonestExpert):
         if box is not None and not any(open_side(n) for n in neighbors(cell)):
             blocker = self.shaft_blocker(cell, box)
             if blocker is not None and blocker != cell:
-                if blocker in self.unreachable:
+                if blocker in self.unreachable or self.wasted(blocker):
                     # the shaft can't go on, so neither can the dig it was for
                     self.unreachable.add(cell)
                     return self.idle()
@@ -392,7 +400,7 @@ class BuildPlanner(JobPlanner):
                 self.placed.pop(tuple(event["pos"]), None)
             elif kind == "place_failed" and self.target is not None:
                 reason = event.get("reason", "")
-                if reason.startswith("out of ") and "gather" in job:
+                if reason.startswith("out of ") and "gather" in job and reason.removeprefix("out of ") not in self.unharvestable:
                     # gathering resupplies it
                     pass
                 elif reason.startswith("out of "):
@@ -613,7 +621,8 @@ class BuildPlanner(JobPlanner):
         have = Counter()
         for name, count in state.get("inventory", []):
             have[name] += count
-        need = Counter(self.plan[c] for c in todo) - have
+        # mining a block the tier can't harvest gives nothing, so those wait for the drone's own stock
+        need = Counter({b: n for b, n in (Counter(self.plan[c] for c in todo) - have).items() if b not in self.unharvestable})
         if not need:
             return None
         box = state["job"]["gather"]

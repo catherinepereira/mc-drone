@@ -149,3 +149,55 @@ def test_body_clear_needs_room_for_the_whole_drone(tmp_path):
     assert not p.body_clear((1.5, 2.5, 1.5), box)
     # straddling a cell edge touches the stone too
     assert not p.body_clear((2.1, 2.5, 1.5), box)
+
+
+def test_a_shaft_through_a_block_the_tier_cant_harvest_is_given_up(tmp_path):
+    from mcdrone.schematic import Schematic
+
+    from drone_model.experts.jobs import MinePlanner
+
+    # coal buried under diamond ore, which a copper drone would break for nothing
+    s = Schematic.empty(2, 3, 1)
+    s.blocks[:, :, :] = "minecraft:stone"
+    s.blocks[0, 0, 0] = "minecraft:coal_ore"
+    s.blocks[2, 0, 0] = "minecraft:diamond_ore"
+    (tmp_path / "scans").mkdir()
+    s.save(tmp_path / "scans" / "d.schem")
+    p = MinePlanner(MASK_IDS, reader=object(), schematics=tmp_path)
+    job = {
+        "kind": "mine", "region": [0, 0, 0, 1, 2, 0], "blocks": ["minecraft:coal_ore"],
+        "scan": {"region": "scans/d.schem"}, "unharvestable": ["minecraft:diamond_ore"],
+    }
+    p.load_scans(job)
+    assert p.wasted((0, 2, 0)) and not p.wasted((1, 2, 0))
+    p.dig({"pos": [0.5, 5.0, 0.5], "yaw": 0.0, "pitch": 0.0, "camera": {"eyeHeight": 0.2}}, (0, 0, 0), "minecraft:coal_ore", job["region"])
+    assert (0, 0, 0) in p.unreachable
+
+
+def test_trenches_go_around_blocks_the_tier_cant_harvest(tmp_path):
+    from mcdrone.schematic import Schematic
+
+    from drone_model.experts.jobs import MinePlanner
+
+    s = Schematic.empty(3, 1, 1)
+    s.blocks[:, :, :] = "minecraft:stone"
+    s.blocks[0, 0, 1] = "minecraft:obsidian"
+    (tmp_path / "scans").mkdir()
+    s.save(tmp_path / "scans" / "t.schem")
+    p = MinePlanner(MASK_IDS, reader=object(), schematics=tmp_path)
+    p.load_scans({"kind": "mine", "region": [0, 0, 0, 2, 0, 0], "scan": {"region": "scans/t.schem"}, "unharvestable": ["minecraft:obsidian"]})
+    state = {"pos": [1.5, 3.0, 0.5]}
+    dug = []
+    while (cell := p.next_dig(state, [0, 0, 0, 2, 0, 0])) is not None:
+        dug.append(cell)
+        p.dug.add(cell)
+    assert sorted(dug) == [(0, 0, 0), (2, 0, 0)]
+
+
+def test_gathering_skips_materials_the_tier_cant_harvest():
+    p = planner()
+    p.unharvestable = frozenset({"minecraft:obsidian"})
+    p.plan = {(10, 1, 0): "minecraft:obsidian"}
+    p.scanned_boxes = set()
+    state = {"pos": [0.5, 5.0, 0.5], "inventory": [], "job": {**JOB, "gather": [20, 0, 0, 22, 2, 2]}}
+    assert p.gather(state, list(p.plan)) is None

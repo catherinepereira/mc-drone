@@ -61,6 +61,8 @@ obs, reward, terminated, truncated, info = env.step(env.action_space.sample())
 env.close()
 ```
 
+`record=True` saves episodes to the training data, `record="test"` to the game's `mcdrone/test-recordings` for runs that shouldn't train anything. Recording stops when the env closes.
+
 For navigate_to the env action is `[forward, right, up, yaw, pitch]` in [-1, 1], with yaw and pitch scaled to 15 degrees per tick. The tool tasks (`DroneEnv(task="dig_block")` and the others) use a dict action: `move` (that vector), `tool` (index into `mcdrone.protocol.TOOLS`), `slot`, and `transfer` (`[kind, slot]`, kind 1 stores a drone stack in the open container, 2 takes one out). An optional `block`, such as `"minecraft:bricks"`, names the block to place, and the drone uses whichever slot holds it.
 
 Observations hold the image streams, a 6-value state vector (velocity, sin and cos of yaw, pitch), and `bounds`, the drone's position inside the geofence from -1 to 1 per axis. Tool tasks add `inventory` and `container` as `[item index, count]` per slot (indices into `DroneClient.item_ids`) and `tool_state` (mining progress, container open, selected slot). Pass `hide_marker=False` to append the marker offset to the state vector, for debugging only.

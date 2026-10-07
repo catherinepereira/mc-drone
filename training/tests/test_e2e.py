@@ -49,7 +49,8 @@ def signal_done():
 
 
 def test_env_reaches_marker_and_records():
-    env = DroneEnv(hide_marker=False, streams=("rgb", "depth", "mask"), record=True)
+    # steer reads the marker, so the episode goes to the test folder, which the API serves until the env closes
+    env = DroneEnv(hide_marker=False, streams=("rgb", "depth", "mask"), record="test")
     try:
         obs, info = env.reset(seed=11)
         assert obs["rgb"].shape == (120, 160, 3)
@@ -62,16 +63,18 @@ def test_env_reaches_marker_and_records():
             steps += 1
         assert terminated, info
         episode_id = info["episode"]["id"]
+
+        time.sleep(1.0)
+        detail = json.loads(http("GET", f"/api/episodes/navigate_to/{episode_id}"))
+        assert detail["meta"]["outcome"] == "success"
+        assert detail["meta"]["client"] == "mcdrone-env"
+        assert len(detail["steps"]) == steps + 1
+        frame = decode_obs(http("GET", f"/api/episodes/navigate_to/{episode_id}/frame/0"))
+        assert frame.rgb.shape == (120, 160, 3)
+        assert frame.mask is not None and frame.depth is not None
     finally:
         env.close()
-
-    time.sleep(1.0)
-    detail = json.loads(http("GET", f"/api/episodes/navigate_to/{episode_id}"))
-    assert detail["meta"]["outcome"] == "success"
-    assert len(detail["steps"]) == steps + 1
-    frame = decode_obs(http("GET", f"/api/episodes/navigate_to/{episode_id}/frame/0"))
-    assert frame.rgb.shape == (120, 160, 3)
-    assert frame.mask is not None and frame.depth is not None
+    assert not json.loads(http("GET", "/api/status"))["recordArmed"]
 
 
 def test_realtime_act_moves_drone_and_observer_sees_frames():

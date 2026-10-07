@@ -6,4 +6,7 @@ export const DEV_FRONTEND_PORT = 5318;
 export const SCHEMA = 2;
 
 // BlueMap's web server, its default port, set in the game's config/bluemap/webserver.conf
-export const BLUEMAP_URL = "http://localhost:8100";
+export const DEV_BLUEMAP_PORT = 8100;
+
+// the dev server proxies BlueMap here, so the map is same-origin and needs no CORS header
+export const BLUEMAP_PATH = "/map/";

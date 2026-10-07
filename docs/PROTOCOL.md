@@ -18,7 +18,7 @@ Text frames are JSON objects with a `type` field. Binary frames are observations
 | `act` | `action` | controller, realtime mode |
 | `step` | `action`, `ticks`, `id` | controller, lockstep mode, answered by an `obs` with `replyTo` |
 | `reset` | `seed`, `options`, `id` | controller, answered by an `obs` with `replyTo` |
-| `record` | `on` | controller |
+| `record` | `on`, optional `test` | controller. With `test` the episodes go to the game folder's `mcdrone/test-recordings`, out of the training data. Recording a controller turned on stops when it releases or disconnects |
 | `pilot` | `on` | controller, moves the game camera into or out of the drone |
 | `release` | | controller, gives up control and becomes an observer |
 | `memory` | `step`, `changes`, optional `snapshot` and `focus`, see Drone memory | controller, relayed to every other client |
@@ -161,7 +161,7 @@ Header:
 
 ```
 data/<task>/<episode_id>/
-  meta.json      task, seed, options, width, height, streams, schema, modVersion, outcome, steps, totalReward, arena
+  meta.json      task, seed, options, width, height, streams, schema, modVersion, pilot, client, outcome, steps, totalReward, arena
   steps.jsonl    one line per step: step, tick, state, action, reward, done
   rgb/000000.png
   depth/000000.f32   raw little-endian float32, height x width
@@ -170,7 +170,7 @@ data/<task>/<episode_id>/
   log.jsonl
 ```
 
-Step `n` pairs the frame captured before action `n` with action `n`. The last step has `action: null` and carries the terminal frame.
+Step `n` pairs the frame captured before action `n` with action `n`. The last step has `action: null` and carries the terminal frame. `pilot` is `bridge` or `keyboard`, and `client` names the bridge client that flew a `bridge` episode, such as `mcdrone-env`.
 
 ## Log line
 
@@ -220,7 +220,7 @@ Jobs run in the player's own world: nothing is built or cleared, the drone keeps
 
 Boxes and points fall back to the player's selection, set with the tablet or `select`. `dest` is where the target's lowest corner lands, a saved region's lowest corner when it names one, and the copy keeps the source's orientation. With `gather` the drone mines the blocks it needs from that box before building. It can't overlap the copy's source or the destination, and is at most 32 blocks per side. Copy and build boxes are at most 16 blocks per side and mining regions 32, every box is within 96 blocks of the player, and only the singleplayer host can start jobs. During a job the server refuses drone breaks and places outside the job's box with a `break_failed` or `place_failed` event, so a copy only touches its destination and gather box, and a mining job never digs out of its region.
 
-`state.job` is `{ "kind": "copy" | "build", "source": [x0, y0, z0, x1, y1, z1], "schematic": "house.schem", "dest": [x0, y0, z0, x1, y1, z1], "gather": [x0, y0, z0, x1, y1, z1], "size": [w, h, l] }` with inclusive corners, `source` only for copies, `schematic` only for builds, and `gather` only when the drone mines its materials there. A mining job's is `{ "kind": "mine", "region": [x0, y0, z0, x1, y1, z1], "blocks": ["minecraft:coal_ore", "minecraft:iron_ore"] }`, and a return home's `{ "kind": "return_home", "station": [x, y, z] }`. The drone gets the boxes, never the copy's contents: in vision perception it reads those with its camera, see Perception. The geofence covers the job's boxes, the drone's starting point, and its home station when that's within 96 blocks of the player, plus 6 blocks around them.
+`state.job` is `{ "kind": "copy" | "build", "source": [x0, y0, z0, x1, y1, z1], "schematic": "house.schem", "dest": [x0, y0, z0, x1, y1, z1], "gather": [x0, y0, z0, x1, y1, z1], "size": [w, h, l] }` with inclusive corners, `source` only for copies, `schematic` only for builds, and `gather` only when the drone mines its materials there. A mining job's is `{ "kind": "mine", "region": [x0, y0, z0, x1, y1, z1], "blocks": ["minecraft:coal_ore", "minecraft:iron_ore"] }`, and a return home's `{ "kind": "return_home", "station": [x, y, z] }`. Every job also carries `tier`, the drone's, and `unharvestable`, the ids of every block that tier breaks without a drop, read from the game's tool tags. A mining job leaves out kinds the drone's tier can't harvest and fails when that leaves none. The drone gets the boxes, never the copy's contents: in vision perception it reads those with its camera, see Perception. The geofence covers the job's boxes, the drone's starting point, and its home station when that's within 96 blocks of the player, plus 6 blocks around them.
 
 Copy and build metrics are matching destination cells, non-air target blocks, and destination blocks that don't belong. Each match is worth 10 divided by the target's block count, each wrong block costs 1, and success needs every target block in place with nothing extra. Mining metrics are the blocks of the kind left and how many there were, each one mined is worth 10 divided by the starting count, and success is none left. Block properties such as stair facing don't count yet. A job's default `maxSteps` is 100000. A return home has no metrics, the client ends it as a success once the drone docks.
 

@@ -15,7 +15,7 @@ $env:JAVA_HOME = "$env:USERPROFILE\.jdks\jdk-25.0.4.1+1"   # wherever JDK 25 liv
 .\gradlew.bat runClient      # dev client with the mod loaded
 ```
 
-`runClient` writes recordings to `../training/data`, where training reads them, and logs to `run/logs`. A normal install writes both under `.minecraft/mcdrone/`.
+`runClient` writes recordings to `../training/data`, where training reads them, and logs to `run/logs`. A normal install writes both under `.minecraft/mcdrone/`. Test recordings, the client gametest's own and any a bridge client asks for with `test`, go to `mcdrone/test-recordings` in the game folder.
 
 To use the mod in the regular launcher, install Fabric for 26.3 with the Fabric installer, then put `build/libs/mcdrone-0.1.0.jar` and the Fabric API jar in `.minecraft/mods`.
 
@@ -33,7 +33,7 @@ Create a creative superflat world. The copper, iron, and diamond drones, the tab
 | J | Start a copy job from the tablet's selection |
 | K | Open the job screen for the active drone |
 
-While piloting: WASD moves, Space and Shift climb and descend, the mouse turns the camera, holding the left button mines, the right button places from the selected slot, and the hotbar keys select slots 0 to 8. In the inventory screen a click moves a stack between the drone and the open container, and a right click selects a slot. With recording armed and no bridge controller, episodes chain automatically so you can record demos back to back.
+While piloting: WASD moves, Space and Shift climb and descend, the mouse turns the camera, holding the left button mines, the right button places from the selected slot, and the hotbar keys select slots 0 to 8. In the inventory screen a click moves a stack between the drone and the open container, and a right click selects a slot. With recording armed and no bridge controller, episodes chain automatically so you can record demos back to back, until one passes with no input.
 
 ## Jobs
 
@@ -79,7 +79,7 @@ The settings are in `config/mcdrone-battery.json`, written with the defaults on 
 
 ## Web map
 
-With [BlueMap](https://modrinth.com/mod/bluemap) installed next to the mod, its web map at `http://localhost:8100` shows the saved regions as colored boxes, each drone with its tier's icon, charge, and queue, and the charging stations. The markers update every second, toggle them from the map's menu. The dashboard's Map tab embeds it. The dev client loads BlueMap 5.28. On its first start BlueMap writes `config/bluemap/core.conf` (in `build/run/clientGameTest` for the dev client) and waits for `accept-download: true` there, which accepts Mojang's EULA and lets it download the vanilla client jar it renders with, then `/bluemap reload` or a restart starts the map. Without BlueMap the mod runs the same, minus the map.
+With [BlueMap](https://modrinth.com/mod/bluemap) installed next to the mod, its web map at `http://localhost:8100` shows the saved regions as colored boxes, each drone with its tier's icon, charge, and queue, and the charging stations. The markers update every second, toggle them from the map's menu. The dashboard's Map tab embeds it. The dev client loads BlueMap 5.28. BlueMap waits for `accept-download: true` in `config/bluemap/core.conf`, which accepts Mojang's EULA and lets it download the Minecraft client jar it renders with. The client gametest's run folder is cleared on every launch, so its BlueMap settings come from `devconfig/bluemap/`: `core.conf` with the download on, and `webserver.conf`, which binds the map to `127.0.0.1`. For `runClient`, set it in `run/config/bluemap/core.conf` after the first start, then `/bluemap reload`. Without BlueMap the mod runs the same, minus the map.
 
 ## Crafting
 
@@ -88,7 +88,7 @@ Rows top to bottom, `_` is an empty slot.
 | Item | Recipe |
 | --- | --- |
 | Copper, iron, or diamond drone | `M _ M` / `_ R _` / `M C M`, M a copper ingot, iron ingot, or diamond, R a block of redstone, C a chest |
-| Tablet | `G G G` / `G R G` / `C I C`, G a glass pane, R redstone, C a copper ingot, I an iron ingot |
+| Tablet | `I R I` / `I D I` / `I R I`, I an iron ingot, R redstone, D a diamond |
 | Charging station | `C L C` / `I R I` / `C C C`, C a copper ingot, L a lightning rod, I an iron ingot, R a block of redstone |
 
 ## Tasks
@@ -161,7 +161,7 @@ src/gametest/   client gametest
 
 - Singleplayer only. The drone pose is client-authoritative and lockstep freezes the integrated server.
 - A player can own many drones, but one flies at a time, the active one.
-- Drops follow the tier's pickaxe. Gold, diamond, emerald, and redstone ore need an iron or diamond drone, and obsidian a diamond one.
+- Drops follow the tier's pickaxe. Gold, diamond, emerald, and redstone ore need an iron or diamond drone, and obsidian a diamond one. Mine jobs leave out kinds the drone gets nothing from, the job screen warns about them before you start, and the brain digs around those blocks.
 - RGB capture reads the main framebuffer, so frames show whatever the game window renders at its current FOV and settings. Keep the window open and unminimized while streaming.
 - Each lockstep step waits for one rendered frame, so step rate follows FPS. Minecraft drops to 10 FPS when the window is unfocused for a while, set Video Settings, Inactivity FPS Limit to Minimized to keep full speed in the background.
 - The marker block can't be broken in survival. It's meant for the arena, not gameplay.

@@ -1,18 +1,25 @@
 package com.catherinepereira.mcdrone.client.hud;
 
 import com.catherinepereira.mcdrone.client.ClientRuntime;
+import com.catherinepereira.mcdrone.entity.DroneEntity;
+import com.catherinepereira.mcdrone.entity.DroneTier;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.CycleButton;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
+import net.minecraft.resources.Identifier;
+import net.minecraft.world.level.block.Block;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -27,6 +34,7 @@ public final class JobScreen extends Screen {
 	private static final int BORDER = 0xFFDDE3EC;
 	private static final int TEXT = 0xFF1F2933;
 	private static final int MUTED = 0xFF6B7785;
+	private static final int WARN = 0xFFB45309;
 	// the tablet selection in the region pickers, and no gather region
 	private static final String SELECTION = "";
 	private static final String NONE = "";
@@ -55,6 +63,9 @@ public final class JobScreen extends Screen {
 	private String regionName = "";
 	private String purpose = "general";
 	private @Nullable String message;
+	// blocks the active drone's tier would break for nothing, checked again whenever the inputs change
+	private @Nullable String warning;
+	private String warningKey = "";
 	private int left;
 	private int top;
 	// widget rows above the save row, counted as init adds them
@@ -238,6 +249,76 @@ public final class JobScreen extends Screen {
 		}
 	}
 
+	@Override
+	public void tick() {
+		super.tick();
+		DroneEntity drone = this.runtime.controller().drone();
+		// a job without a drone spawns a copper one
+		DroneTier tier = drone != null ? drone.tier() : DroneTier.COPPER;
+		String key = this.action + "|" + this.region + "|" + this.gather + "|" + this.subject + "|" + tier;
+		if (!key.equals(this.warningKey)) {
+			this.warningKey = key;
+			this.warning = this.tierWarning(tier);
+		}
+	}
+
+	/** What the drone would break for nothing: the kinds a mine job names, or the blocks a copy gathers its materials for */
+	private @Nullable String tierWarning(DroneTier tier) {
+		Set<Block> kinds = new LinkedHashSet<>();
+		if (this.action == Action.MINE) {
+			for (String name : this.subject.trim().split("[,\\s]+")) {
+				Identifier id = name.isEmpty() ? null : Identifier.tryParse(name);
+				if (id != null) {
+					BuiltInRegistries.BLOCK.getOptional(id).ifPresent(kinds::add);
+				}
+			}
+		} else if (this.action == Action.COPY && !this.gather.equals(NONE) && this.minecraft != null && this.minecraft.level != null) {
+			BlockPos[] box = this.sourceBox();
+			if (box != null) {
+				for (BlockPos p : BlockPos.betweenClosed(box[0], box[1])) {
+					kinds.add(this.minecraft.level.getBlockState(p).getBlock());
+				}
+			}
+		}
+		List<Block> lost = kinds.stream().filter(b -> !b.defaultBlockState().isAir() && !tier.canHarvest(b)).toList();
+		if (lost.isEmpty()) {
+			return null;
+		}
+		List<String> names = lost.stream().map(b -> BuiltInRegistries.BLOCK.getKey(b).getPath()).toList();
+		String listed = String.join(", ", names.subList(0, Math.min(2, names.size()))) + (names.size() > 2 ? " +" + (names.size() - 2) : "");
+		DroneTier need = DroneTier.COPPER;
+		for (Block b : lost) {
+			DroneTier lowest = DroneTier.lowestFor(b);
+			if (lowest == null) {
+				need = null;
+				break;
+			}
+			need = lowest.ordinal() > need.ordinal() ? lowest : need;
+		}
+		String verb = this.action == Action.MINE ? "Skips " : "Can't gather ";
+		return verb + listed + (need == null ? ", no drone gets drops" : ", needs " + need.id + " tier");
+	}
+
+	// the copy's source box as min and max corners, null before the tablet has a selection
+	private BlockPos @Nullable [] sourceBox() {
+		if (this.region.equals(SELECTION)) {
+			BlockPos min = this.runtime.selection.min();
+			BlockPos size = this.runtime.selection.size();
+			return min == null || size == null ? null : new BlockPos[] {min, min.offset(size.getX() - 1, size.getY() - 1, size.getZ() - 1)};
+		}
+		for (JsonElement e : this.runtime.regions()) {
+			JsonObject r = e.getAsJsonObject();
+			if (r.get("name").getAsString().equals(this.region)) {
+				JsonArray b = r.getAsJsonArray("box");
+				return new BlockPos[] {
+					new BlockPos(b.get(0).getAsInt(), b.get(1).getAsInt(), b.get(2).getAsInt()),
+					new BlockPos(b.get(3).getAsInt(), b.get(4).getAsInt(), b.get(5).getAsInt())
+				};
+			}
+		}
+		return null;
+	}
+
 	private void saveRegion() {
 		String problem = this.runtime.saveRegion(this.regionName.trim(), this.purpose);
 		this.message = problem != null ? problem : "Saved " + this.purpose + " region " + this.regionName.trim();
@@ -261,8 +342,9 @@ public final class JobScreen extends Screen {
 		g.text(this.font, "Drone jobs", this.left, this.top + 4, TEXT, false);
 		int y = this.top + 22 + this.rows * ROW + 6;
 		g.text(this.font, "Save the tablet selection as a region", this.left, y, MUTED, false);
-		String hint = this.message != null ? this.message : this.hint();
-		g.text(this.font, hint, this.left, y + ROW + 18, this.message != null ? TEXT : MUTED, false);
+		String hint = this.message != null ? this.message : this.warning != null ? this.warning : this.hint();
+		int color = this.message != null ? TEXT : this.warning != null ? WARN : MUTED;
+		g.text(this.font, hint, this.left, y + ROW + 18, color, false);
 	}
 
 	private String hint() {

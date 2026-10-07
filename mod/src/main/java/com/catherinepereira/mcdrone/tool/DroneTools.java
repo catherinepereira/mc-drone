@@ -136,7 +136,7 @@ public final class DroneTools {
 			return;
 		}
 		ItemStack tool = tool(drone);
-		boolean correct = !state.requiresCorrectToolForDrops() || tool.isCorrectToolForDrops(state);
+		boolean correct = drone.tier().canHarvest(state);
 		drone.breakProgress += hardness == 0 ? 1.0F : tool.getDestroySpeed(state) / hardness / (correct ? 30.0F : 100.0F);
 		if (drone.breakProgress < 1.0F) {
 			level.destroyBlockProgress(drone.getId(), pos, (int) (drone.breakProgress * 10.0F));

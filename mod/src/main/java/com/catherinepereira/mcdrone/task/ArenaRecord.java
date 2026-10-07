@@ -2,6 +2,7 @@ package com.catherinepereira.mcdrone.task;
 
 import com.catherinepereira.mcdrone.Json;
 import com.catherinepereira.mcdrone.entity.DroneEntity;
+import com.catherinepereira.mcdrone.entity.DroneTier;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import java.util.ArrayList;
@@ -41,6 +42,8 @@ public final class ArenaRecord {
 	public @Nullable BlockPos referenceBase;
 	public @Nullable BlockPos buildBase;
 	public @Nullable DroneJob job;
+	// the drone's tier, its job lists the blocks it would break for nothing
+	public DroneTier tier = DroneTier.COPPER;
 	// the job's boxes as schematic files by box name, set in scan perception
 	public @Nullable JsonObject scan;
 	// overrides the geofence the client derives from origin and radius, as x0, y0, z0, x1, y1, z1
@@ -135,6 +138,10 @@ public final class ArenaRecord {
 			if (this.scan != null) {
 				job.add("scan", this.scan);
 			}
+			job.addProperty("tier", this.tier.id);
+			JsonArray unharvestable = new JsonArray();
+			this.tier.unharvestable().forEach(unharvestable::add);
+			job.add("unharvestable", unharvestable);
 			json.add("job", job);
 		}
 		if (this.fence != null) {

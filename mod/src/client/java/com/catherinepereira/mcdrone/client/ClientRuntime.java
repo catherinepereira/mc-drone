@@ -102,6 +102,7 @@ public final class ClientRuntime {
 	private long lastMetricsMs;
 	private int episodeCounter;
 	private int autoResetIn = -1;
+	private boolean bridgeArmed;
 
 	private @Nullable PendingReset pendingReset;
 	private int resetRequestSeq;
@@ -146,7 +147,7 @@ public final class ClientRuntime {
 		String session = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"));
 		this.log = new DroneLog(logs != null ? Path.of(logs) : gameDir.resolve("mcdrone").resolve("logs"), session, this.config);
 		this.controller = new DroneController(mc, this.config);
-		this.recorder = new Recorder(data != null ? Path.of(data) : gameDir.resolve("mcdrone").resolve("data"), this.log);
+		this.recorder = new Recorder(data != null ? Path.of(data) : gameDir.resolve("mcdrone").resolve("data"), gameDir.resolve("mcdrone").resolve("test-recordings"), this.log);
 		this.log.addListener(this.recorder::appendLog);
 		this.bridge = new BridgeServer(this);
 		this.log.addListener(this::forwardLog);
@@ -263,6 +264,7 @@ public final class ClientRuntime {
 	}
 
 	public void toggleRecording() {
+		this.bridgeArmed = false;
 		this.recorder.setArmed(!this.recorder.armed());
 		this.toast(this.recorder.armed() ? "Recording armed, starts with the next episode" : "Recording stopped");
 	}
@@ -715,9 +717,14 @@ public final class ClientRuntime {
 			this.finishedJob = this.task.kind();
 			this.finishedJobSucceeded = snap.has("success") && snap.get("success").getAsBoolean();
 		}
-		// keyboard demos chain episodes so a pilot can record many in a row
+		// keyboard demos chain episodes so a pilot can record many in a row, until one passes with no input
 		if (this.recorder.armed() && this.controllerSession == null) {
-			this.autoResetIn = this.config.autoResetTicks;
+			if (this.recorder.sawInput()) {
+				this.autoResetIn = this.config.autoResetTicks;
+			} else {
+				this.recorder.setArmed(false);
+				this.toast("Recording stopped, the last episode had no input");
+			}
 		}
 	}
 
@@ -931,7 +938,7 @@ public final class ClientRuntime {
 		boolean hasOrigin = this.config.arenaX != null && this.config.arenaZ != null;
 		ClientPlayNetworking.send(new ResetTaskPayload(
 			this.pendingReset.requestId(), kind.id, terrain, seed, radius, obstacles, targets, hasOrigin, hasOrigin ? this.config.arenaX : 0,
-			hasOrigin ? this.config.arenaZ : 0, region, subject, size, scan
+			hasOrigin ? this.config.arenaZ : 0, region, subject, size, scan, options.has("tier") ? options.get("tier").getAsString() : ""
 		));
 		this.log.info(
 			"task.reset_requested",
@@ -1172,6 +1179,9 @@ public final class ClientRuntime {
 		meta.addProperty("schema", SCHEMA);
 		meta.addProperty("modVersion", FabricLoader.getInstance().getModContainer("mcdrone").map(c -> c.getMetadata().getVersion().getFriendlyString()).orElse("dev"));
 		meta.addProperty("pilot", pending.session() != null ? "bridge" : "keyboard");
+		if (pending.session() != null) {
+			meta.addProperty("client", pending.session().client);
+		}
 		meta.addProperty("startedAt", java.time.Instant.now().toString());
 		meta.add("marker", Json.pos(ready.marker()));
 		meta.add("arena", arena);
@@ -1334,7 +1344,8 @@ public final class ClientRuntime {
 				this.startReset(seed, options, session, id);
 			}
 			case "record" -> {
-				this.recorder.setArmed(msg.get("on").getAsBoolean());
+				this.bridgeArmed = msg.get("on").getAsBoolean();
+				this.recorder.setArmed(this.bridgeArmed, msg.has("test") && msg.get("test").getAsBoolean());
 				this.broadcastStatus();
 			}
 			case "pilot" -> {
@@ -1401,6 +1412,11 @@ public final class ClientRuntime {
 	private void releaseController(String reason) {
 		this.controllerSession = null;
 		this.bridgeAction = DroneAction.ZERO;
+		// recording a controller armed ends with it, so the world doesn't keep chaining episodes nobody flies
+		if (this.bridgeArmed) {
+			this.bridgeArmed = false;
+			this.recorder.setArmed(false);
+		}
 		// never leave the world frozen without someone to step it
 		this.setMode(Mode.REALTIME);
 		this.log.info("bridge.controller_released", DroneLog.fields("reason", reason));

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import gymnasium as gym
 import numpy as np
@@ -53,7 +53,7 @@ class DroneEnv(gym.Env):
         hide_marker: bool = True,
         task_options: dict[str, Any] | None = None,
         depth_max: float = 64.0,
-        record: bool = False,
+        record: bool | Literal["test"] = False,
         log_dir: Path | None = None,
         client: DroneClient | None = None,
         render_mode: str | None = None,
@@ -132,7 +132,7 @@ class DroneEnv(gym.Env):
                 extra["actionPauseMs"] = self.action_pause_ms
             self._client.configure(mode="lockstep", width=self.width, height=self.height, streams=list(self.streams), depthMax=self.depth_max, **extra)
             self._client.subscribe(obs=False)
-            self._client.record(self.record)
+            self._client.record(bool(self.record), test=self.record == "test")
             self._item_index = {name: i for i, name in enumerate(self._client.item_ids)}
             self._configured = True
         return self._client

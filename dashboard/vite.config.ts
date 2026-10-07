@@ -1,7 +1,12 @@
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
-import { DEV_BRIDGE_PORT, DEV_FRONTEND_PORT } from "./src/config.ts";
+import {
+  BLUEMAP_PATH,
+  DEV_BLUEMAP_PORT,
+  DEV_BRIDGE_PORT,
+  DEV_FRONTEND_PORT,
+} from "./src/config.ts";
 
 // the dashboard container reaches the game on the host through host.docker.internal
 const bridgeHost = process.env.MCDRONE_BRIDGE_HOST ?? "127.0.0.1";
@@ -20,6 +25,10 @@ export default defineConfig({
         target: `ws://${bridgeHost}:${DEV_BRIDGE_PORT}`,
         ws: true,
         changeOrigin: false,
+      },
+      [BLUEMAP_PATH]: {
+        target: `http://${bridgeHost}:${DEV_BLUEMAP_PORT}`,
+        rewrite: (path) => "/" + path.slice(BLUEMAP_PATH.length),
       },
     },
   },

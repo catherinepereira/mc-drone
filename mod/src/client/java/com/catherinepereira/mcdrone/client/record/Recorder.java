@@ -26,6 +26,7 @@ import org.jspecify.annotations.Nullable;
  */
 public final class Recorder {
 	private final Path dataDir;
+	private final Path testDir;
 	private final DroneLog log;
 	private final ThreadPoolExecutor io = (ThreadPoolExecutor) Executors.newFixedThreadPool(1, r -> {
 		Thread t = new Thread(r, "mcdrone-recorder");
@@ -34,15 +35,25 @@ public final class Recorder {
 	});
 
 	private boolean armed;
+	private boolean test;
+	private boolean sawInput;
 	private @Nullable Episode episode;
 
-	public Recorder(Path dataDir, DroneLog log) {
+	/** Test recordings go to testDir, out of the training data */
+	public Recorder(Path dataDir, Path testDir, DroneLog log) {
 		this.dataDir = dataDir;
+		this.testDir = testDir;
 		this.log = log;
 	}
 
+	/** Where the next episode goes */
 	public Path dataDir() {
-		return this.dataDir;
+		return this.test ? this.testDir : this.dataDir;
+	}
+
+	/** Whether any action since the latest episode began moved the drone, turned it, or used a tool */
+	public boolean sawInput() {
+		return this.sawInput;
 	}
 
 	public boolean armed() {
@@ -59,21 +70,27 @@ public final class Recorder {
 
 	/** Recording starts with the next episode and covers every episode until disarmed */
 	public void setArmed(boolean armed) {
+		this.setArmed(armed, false);
+	}
+
+	public void setArmed(boolean armed, boolean test) {
 		this.armed = armed;
+		this.test = armed && test;
 		if (!armed && this.episode != null) {
 			this.finish("stopped");
 		}
-		this.log.info("record.armed", DroneLog.fields("on", armed));
+		this.log.info("record.armed", DroneLog.fields("on", armed, "test", this.test));
 	}
 
 	public void beginEpisode(String task, String id, JsonObject meta) {
 		if (this.episode != null) {
 			this.finish("replaced");
 		}
+		this.sawInput = false;
 		if (!this.armed) {
 			return;
 		}
-		Path dir = this.dataDir.resolve(task).resolve(id);
+		Path dir = this.dataDir().resolve(task).resolve(id);
 		this.episode = new Episode(dir, meta);
 		Episode ep = this.episode;
 		this.io.execute(() -> ep.open());
@@ -82,6 +99,7 @@ public final class Recorder {
 
 	/** Remembers the action applied after the latest frame */
 	public void onAction(DroneAction action) {
+		this.sawInput |= !action.idle();
 		Episode ep = this.episode;
 		if (ep == null) {
 			return;

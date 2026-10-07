@@ -88,6 +88,8 @@ public final class Arena {
 		terrain.place(level, new Random(req.seed() ^ 0x5EEDL));
 		ArenaRecord record = new ArenaRecord(kind, new BlockPos(ox, floorY, oz), radius);
 		record.terrain = terrain.kind;
+		DroneEntity active = Drones.active(player);
+		record.tier = !req.tier().isEmpty() ? DroneTier.parse(req.tier()) : active != null ? active.tier() : DroneTier.COPPER;
 		List<Vec3> keyPoints = new ArrayList<>();
 		int targets = Math.clamp(req.targets(), 1, 8);
 		List<ItemStack> stock = null;
@@ -176,7 +178,7 @@ public final class Arena {
 				BlockPos min = site(level, rng, record, keyPoints, terrain, size, size, Blocks.STONE.defaultBlockState(), 0.0).above();
 				int ores = Math.max(3, size * size * depth / 15);
 				Structures.deposit(level, rng, min, min.offset(size - 1, depth - 1, size - 1), Collections.nCopies(ores, Blocks.COAL_ORE));
-				record.job = MineJob.start(level, min, min.offset(size - 1, depth - 1, size - 1), "minecraft:coal_ore");
+				record.job = MineJob.start(level, min, min.offset(size - 1, depth - 1, size - 1), "minecraft:coal_ore", record.tier);
 			}
 		}
 
@@ -211,14 +213,15 @@ public final class Arena {
 
 		parkPlayer(level, player, ox, floorY, oz);
 
-		DroneEntity drone = Drones.active(player);
+		DroneEntity drone = active;
 		if (drone == null) {
-			drone = DroneItem.spawnFor(level, player, spawn, yaw, DroneTier.COPPER);
+			drone = DroneItem.spawnFor(level, player, spawn, yaw, record.tier);
 		}
 		drone.snapTo(spawn.x, spawn.y, spawn.z, yaw, 0.0F);
 		// arenas hand out a full drone, a player job may have run it down
 		drone.trainingArena = true;
 		drone.recharge();
+		drone.setTier(record.tier);
 		drone.inventory.clearContent();
 		drone.openContainer = null;
 		drone.breakingPos = null;
@@ -334,7 +337,7 @@ public final class Arena {
 					throw new IllegalArgumentException("could not read " + req.subject() + ": " + e.getMessage(), e);
 				}
 			}
-			case MINE_REGION -> MineJob.start(level, a, b, req.subject());
+			case MINE_REGION -> MineJob.start(level, a, b, req.subject(), drone != null ? drone.tier() : DroneTier.COPPER);
 			case HARVEST_REGION -> HarvestJob.start(level, a, b, req.subject());
 			default -> throw new IllegalArgumentException(kind.id + " is not a job");
 		};
@@ -372,6 +375,7 @@ public final class Arena {
 		}
 		ArenaRecord record = new ArenaRecord(kind, corners[0], 0);
 		record.job = job;
+		record.tier = drone.tier();
 		if (req.scan()) {
 			record.scan = Scans.write(level, job, kind.id + "-" + Long.toHexString(req.seed()));
 		}

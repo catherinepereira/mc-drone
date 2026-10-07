@@ -17,6 +17,10 @@ public record DroneAction(float forward, float right, float up, float yaw, float
 		this(forward, right, up, yaw, pitch, ToolRequest.IDLE);
 	}
 
+	public boolean idle() {
+		return this.forward == 0 && this.right == 0 && this.up == 0 && this.yaw == 0 && this.pitch == 0 && this.tools.idle();
+	}
+
 	/** The same action with one-shot tool parts dropped, so a held realtime action doesn't place or transfer every tick */
 	public DroneAction continued() {
 		return new DroneAction(this.forward, this.right, this.up, this.yaw, this.pitch, this.tools.continued());

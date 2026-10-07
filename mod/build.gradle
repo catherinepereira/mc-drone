@@ -55,6 +55,16 @@ dependencies {
 	localRuntime "maven.modrinth:bluemap:${project.bluemap_version}"
 }
 
+// the client gametest's run folder is cleared before every launch, BlueMap's settings go back in after
+def gameTestConfig = tasks.register("copyGameTestConfig", Copy) {
+	from "devconfig"
+	into layout.buildDirectory.dir("run/clientGameTest/config")
+	mustRunAfter "deleteGameTestRunDir"
+}
+tasks.named("runClientGameTest") {
+	dependsOn gameTestConfig
+}
+
 processResources {
 	def version = project.version
 	inputs.property "version", version

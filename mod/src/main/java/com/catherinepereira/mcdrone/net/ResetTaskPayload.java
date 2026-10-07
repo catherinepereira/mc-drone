@@ -11,11 +11,12 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
  * region is empty for arenas, or the job's box corners a and b and its paste point as 9 ints, plus the corners of a box to
  * gather materials from as 6 more for a copy or build job that mines them first. subject is the schematic file
  * for a build job and the block for a mine job. size is the structure or deposit side for the arenas that build one.
- * scan writes each of the job's boxes to a schematic for the drone, see task.Scans
+ * scan writes each of the job's boxes to a schematic for the drone, see task.Scans.
+ * tier rebuilds a training arena's drone as that tier, empty keeps it as it is
  */
 public record ResetTaskPayload(
 	int requestId, String task, String terrain, long seed, int radius, int obstacles, int targets, boolean hasOrigin, int originX, int originZ,
-	int[] region, String subject, int size, boolean scan
+	int[] region, String subject, int size, boolean scan, String tier
 ) implements CustomPacketPayload {
 	public static final Type<ResetTaskPayload> TYPE = new Type<>(McDrone.id("reset_task"));
 	public static final StreamCodec<FriendlyByteBuf, ResetTaskPayload> CODEC = CustomPacketPayload.codec(ResetTaskPayload::write, ResetTaskPayload::read);
@@ -23,7 +24,7 @@ public record ResetTaskPayload(
 	private static ResetTaskPayload read(FriendlyByteBuf buf) {
 		return new ResetTaskPayload(
 			buf.readVarInt(), buf.readUtf(), buf.readUtf(), buf.readLong(), buf.readVarInt(), buf.readVarInt(), buf.readVarInt(), buf.readBoolean(), buf.readVarInt(), buf.readVarInt(),
-			buf.readVarIntArray(15), buf.readUtf(256), buf.readVarInt(), buf.readBoolean()
+			buf.readVarIntArray(15), buf.readUtf(256), buf.readVarInt(), buf.readBoolean(), buf.readUtf(16)
 		);
 	}
 
@@ -42,6 +43,7 @@ public record ResetTaskPayload(
 		buf.writeUtf(this.subject);
 		buf.writeVarInt(this.size);
 		buf.writeBoolean(this.scan);
+		buf.writeUtf(this.tier, 16);
 	}
 
 	@Override

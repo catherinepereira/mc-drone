@@ -1,9 +1,12 @@
 package com.catherinepereira.mcdrone.task;
 
 import com.catherinepereira.mcdrone.Json;
+import com.catherinepereira.mcdrone.entity.DroneTier;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -30,16 +33,27 @@ public final class MineJob implements DroneJob {
 		this.initial = initial;
 	}
 
-	/** blockNames lists the kinds to mine separated by commas or spaces, such as "coal_ore, minecraft:iron_ore" */
-	public static MineJob start(ServerLevel level, BlockPos a, BlockPos b, String blockNames) {
+	/**
+	 * blockNames lists the kinds to mine separated by commas or spaces, such as "coal_ore, minecraft:iron_ore".
+	 * Kinds the tier breaks without a drop are left out, and the job fails when that leaves none
+	 */
+	public static MineJob start(ServerLevel level, BlockPos a, BlockPos b, String blockNames, DroneTier tier) {
 		Set<Block> blocks = new HashSet<>();
+		List<String> skipped = new ArrayList<>();
 		for (String name : blockNames.trim().split("[,\\s]+")) {
 			Identifier id = Identifier.tryParse(name);
 			Block block = id == null ? null : BuiltInRegistries.BLOCK.getOptional(id).orElse(null);
 			if (block == null || block.defaultBlockState().isAir()) {
 				throw new IllegalArgumentException("unknown block '" + name + "'");
 			}
-			blocks.add(block);
+			if (tier.canHarvest(block)) {
+				blocks.add(block);
+			} else {
+				skipped.add(BuiltInRegistries.BLOCK.getKey(block).getPath());
+			}
+		}
+		if (blocks.isEmpty()) {
+			throw new IllegalArgumentException("a " + tier.id + " drone gets nothing from " + String.join(", ", skipped));
 		}
 		BlockPos min = BlockPos.min(a, b);
 		BlockPos max = BlockPos.max(a, b);

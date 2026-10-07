@@ -138,8 +138,9 @@ class DroneClient:
     def act(self, action: dict[str, Any]) -> None:
         self._send({"type": "act", "action": action})
 
-    def record(self, on: bool) -> None:
-        self._send({"type": "record", "on": on})
+    def record(self, on: bool, test: bool = False) -> None:
+        """test sends episodes to the game's test-recordings folder, out of the training data"""
+        self._send({"type": "record", "on": on, "test": test})
         self.wait_status(lambda s: s.get("recordArmed") == on)
 
     def pilot(self, on: bool) -> None:

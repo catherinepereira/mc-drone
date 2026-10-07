@@ -68,10 +68,14 @@ public class DroneClientGameTest implements FabricClientGameTest {
 			JsonObject configure = msg("configure");
 			configure.addProperty("mode", "lockstep");
 			bridge.send(configure);
+			// the scripted policy reads the marker, so its episodes go to the test folder, out of the training data
 			JsonObject record = msg("record");
 			record.addProperty("on", true);
+			record.addProperty("test", true);
 			bridge.send(record);
 			ctx.waitTicks(2);
+			Path testData = runtime.recorder().dataDir();
+			check(!testData.equals(Path.of(System.getProperty("mcdrone.data", "data"))), "test recordings went to the training data");
 
 			JsonObject reset = msg("reset");
 			reset.addProperty("id", 1);
@@ -436,14 +440,19 @@ public class DroneClientGameTest implements FabricClientGameTest {
 			ctx.waitFor(mc -> runtime.controller().drone().queue().isEmpty() && runtime.task().active() && runtime.task().kind() == TaskKind.RETURN_HOME, 200);
 			ctx.takeScreenshot("mcdrone-docked");
 
+			JsonObject stop = msg("record");
+			stop.addProperty("on", false);
+			bridge.send(stop);
+			ctx.waitFor(mc -> !runtime.recorder().armed(), 100);
 			JsonObject release = msg("release");
 			bridge.send(release);
 			ctx.waitTicks(20);
 			bridge.close();
 
-			Path data = Path.of(System.getProperty("mcdrone.data", "data")).resolve("navigate_to");
+			Path data = testData.resolve("navigate_to");
 			ctx.waitFor(mc -> runtime.recorder().queueDepth() == 0, 200);
 			check(Files.isDirectory(data), "no recordings in " + data);
+			check(!runtime.recorder().dataDir().equals(testData), "recording stayed on the test folder after it stopped");
 
 			holdForExternalDriver(ctx);
 		}
