@@ -11,7 +11,7 @@ import net.minecraft.util.Mth;
 
 /**
  * A quadcopter: a body with a camera pod on the front, two crossed arms with a motor and a two-blade rotor at each end,
- * and landing skids. Model space has y down with the skids at y 24 and the front toward -z, like vanilla mob models
+ * landing skids, and a small chest for its inventory slung between them. Model space has y down with the skids at y 24 and the front toward -z, like vanilla mob models
  */
 public final class DroneModel extends EntityModel<DroneRenderState> {
 	// motor centers sit this far out along x and z, the end of a 13 long arm turned 45 degrees
@@ -64,6 +64,12 @@ public final class DroneModel extends EntityModel<DroneRenderState> {
 			root.addOrReplaceChild("strut_front_" + name, strut, PartPose.offset(side * 2.0F, 21.5F, -1.5F));
 			root.addOrReplaceChild("strut_back_" + name, strut, PartPose.offset(side * 2.0F, 21.5F, 1.5F));
 		}
+		// the cargo chest, between the skids under the body
+		root.addOrReplaceChild(
+			"chest",
+			CubeListBuilder.create().texOffs(36, 16).addBox(-1.5F, 0.0F, -1.5F, 3.0F, 2.0F, 3.0F).texOffs(48, 16).addBox(-0.5F, 0.3F, -1.75F, 1.0F, 1.0F, 0.25F),
+			PartPose.offset(0.0F, 21.5F, 0.0F)
+		);
 		return LayerDefinition.create(mesh, 64, 32);
 	}
 

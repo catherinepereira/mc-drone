@@ -48,7 +48,8 @@ function PointInput({
 
 /**
  * The copy selection and job controls. Corners come from the drone remote in game or are typed here,
- * either way they are the same selection
+ * either way they are the same selection. Copies and builds can paste at a saved region instead of the paste point,
+ * and mine their materials from another saved region first
  */
 export function JobsPanel() {
   const status = useBridge((s) => s.status);
@@ -61,10 +62,19 @@ export function JobsPanel() {
   const [mineRegion, setMineRegion] = useState("");
   const [mineBlock, setMineBlock] = useState("");
   const [mineKind, setMineKind] = useState<"mine" | "harvest">("mine");
+  const [destRegion, setDestRegion] = useState("");
+  const [gatherRegion, setGatherRegion] = useState("");
   const [busy, setBusy] = useState(false);
   const selection = status?.selection;
   const regions = status?.regions ?? [];
   const controller = role === "controller";
+
+  const hasDest = !!destRegion || !!selection?.dest;
+  // where a copy or build pastes and where it mines its materials, when not the paste point and its own blocks
+  const placement = {
+    ...(destRegion ? { dest: destRegion } : {}),
+    ...(gatherRegion ? { gather: gatherRegion } : {}),
+  };
 
   const start = async (options: Record<string, unknown>) => {
     setBusy(true);
@@ -98,16 +108,49 @@ export function JobsPanel() {
         ))}
       </div>
       <p className="text-text-muted mt-2 text-xs">
-        {selection?.problem ??
-          "Ready. The copy keeps the source's orientation, its lowest corner lands on the paste point."}
+        {!selection?.size
+          ? (selection?.problem ?? "Select the source corners.")
+          : !hasDest
+            ? "Set the paste point or pick a saved region to paste at."
+            : "Ready. The copy keeps the source's orientation, its lowest corner lands on the paste point."}
       </p>
+      <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <Field label="Paste at">
+          <select
+            className={inputClass}
+            value={destRegion}
+            onChange={(e) => setDestRegion(e.target.value)}
+          >
+            <option value="">the paste point</option>
+            {regions.map((r) => (
+              <option key={r.id} value={r.name}>
+                {r.name} ({r.purpose}), its low corner
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Materials">
+          <select
+            className={inputClass}
+            value={gatherRegion}
+            onChange={(e) => setGatherRegion(e.target.value)}
+          >
+            <option value="">carried by the drone</option>
+            {regions.map((r) => (
+              <option key={r.id} value={r.name}>
+                mined from {r.name} ({r.purpose})
+              </option>
+            ))}
+          </select>
+        </Field>
+      </div>
       <div className="mt-4 flex flex-wrap items-end gap-2">
         <Button
           variant="primary"
-          disabled={!controller || busy || !!selection?.problem}
-          onClick={() => start({ task: "copy_region" })}
+          disabled={!controller || busy || !selection?.size || !hasDest}
+          onClick={() => start({ task: "copy_region", ...placement })}
         >
-          Copy source to paste point
+          Copy source
         </Button>
       </div>
       <div className="mt-4 flex flex-col gap-3">
@@ -172,7 +215,7 @@ export function JobsPanel() {
         </div>
         <div className="flex items-end gap-2">
           <div className="flex-1">
-            <Field label="Build schematic at paste point">
+            <Field label="Build schematic">
               <input
                 className={inputClass}
                 placeholder="house.schem"
@@ -182,13 +225,14 @@ export function JobsPanel() {
             </Field>
           </div>
           <Button
-            disabled={!controller || busy || !schematic || !selection?.dest}
+            disabled={!controller || busy || !schematic || !hasDest}
             onClick={() =>
               start({
                 task: "build_schematic",
                 schematic: schematic.endsWith(".schem")
                   ? schematic
                   : `${schematic}.schem`,
+                ...placement,
               })
             }
           >

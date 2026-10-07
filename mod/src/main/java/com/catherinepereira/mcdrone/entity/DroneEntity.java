@@ -8,16 +8,21 @@ import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.network.syncher.SynchedEntityData;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.ContainerHelper;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResult;
 import net.minecraft.world.SimpleContainer;
+import net.minecraft.world.SimpleMenuProvider;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.projectile.ItemSupplier;
+import net.minecraft.world.inventory.ChestMenu;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.storage.ValueInput;
 import net.minecraft.world.level.storage.ValueOutput;
+import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -33,7 +38,13 @@ public class DroneEntity extends Entity implements ItemSupplier {
 	public boolean clientControlled;
 
 	// server-side tool state, see DroneTools
-	public final SimpleContainer inventory = new SimpleContainer(INVENTORY_SIZE);
+	// players open the inventory as a chest by using the drone, within reach like a chest boat
+	public final SimpleContainer inventory = new SimpleContainer(INVENTORY_SIZE) {
+		@Override
+		public boolean stillValid(Player player) {
+			return !DroneEntity.this.isRemoved() && player.isWithinEntityInteractionRange(DroneEntity.this.getBoundingBox(), 4.0);
+		}
+	};
 	public @Nullable BlockPos openContainer;
 	public @Nullable BlockPos breakingPos;
 	public float breakProgress;
@@ -79,6 +90,14 @@ public class DroneEntity extends Entity implements ItemSupplier {
 	@Override
 	public boolean isPickable() {
 		return true;
+	}
+
+	@Override
+	public InteractionResult interact(Player player, InteractionHand hand, Vec3 location) {
+		if (player.level() instanceof ServerLevel) {
+			player.openMenu(new SimpleMenuProvider((id, playerInventory, p) -> ChestMenu.threeRows(id, playerInventory, this.inventory), this.getDisplayName()));
+		}
+		return InteractionResult.SUCCESS;
 	}
 
 	@Override

@@ -8,7 +8,8 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 /**
  * Client to server, rebuild the arena for task (a TaskKind id), or start a job in the player's world.
  * hasOrigin false means build the arena under the player and report the origin back.
- * region is empty for arenas, or the job's box corners a and b and its paste point as 9 ints. subject is the schematic file
+ * region is empty for arenas, or the job's box corners a and b and its paste point as 9 ints, plus the corners of a box to
+ * gather materials from as 6 more for a copy or build job that mines them first. subject is the schematic file
  * for a build job and the block for a mine job. size is the structure or deposit side for the arenas that build one.
  * scan writes each of the job's boxes to a schematic for the drone, see task.Scans
  */
@@ -22,7 +23,7 @@ public record ResetTaskPayload(
 	private static ResetTaskPayload read(FriendlyByteBuf buf) {
 		return new ResetTaskPayload(
 			buf.readVarInt(), buf.readUtf(), buf.readUtf(), buf.readLong(), buf.readVarInt(), buf.readVarInt(), buf.readVarInt(), buf.readBoolean(), buf.readVarInt(), buf.readVarInt(),
-			buf.readVarIntArray(9), buf.readUtf(256), buf.readVarInt(), buf.readBoolean()
+			buf.readVarIntArray(15), buf.readUtf(256), buf.readVarInt(), buf.readBoolean()
 		);
 	}
 

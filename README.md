@@ -2,6 +2,8 @@
 
 Pilotable drone for Minecraft Java whose camera feeds external programs, for recording flights and training models that fly it.
 
+In your own world the drone runs jobs you set up with its remote: copy a region, build a schematic, mine a block, or harvest a field. A copy or build can mine its materials from a third region first. It reads blocks with its camera through a learned block reader, or with scan perception straight from the world. Training arenas cover the same jobs plus navigation and tool tasks, on flat, rough, or cave terrain.
+
 | Folder | What it is |
 | --- | --- |
 | [mod](mod) | Fabric mod: drone, piloting, jobs, bridge server, recorder, HUD |

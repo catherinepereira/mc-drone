@@ -306,8 +306,8 @@ public final class Arena {
 	private static TaskReadyPayload startJob(ServerPlayer player, ResetTaskPayload req, TaskKind kind) {
 		ServerLevel level = player.level();
 		int[] r = req.region();
-		if (r.length != 9) {
-			throw new IllegalArgumentException("a job needs its box corners and a paste point");
+		if (r.length != 9 && r.length != 15) {
+			throw new IllegalArgumentException("a job needs its box corners and a paste point, and optionally a gather box");
 		}
 		BlockPos a = new BlockPos(r[0], r[1], r[2]);
 		BlockPos b = new BlockPos(r[3], r[4], r[5]);
@@ -326,6 +326,12 @@ public final class Arena {
 			case HARVEST_REGION -> HarvestJob.start(level, a, b, req.subject());
 			default -> throw new IllegalArgumentException(kind.id + " is not a job");
 		};
+		if (r.length == 15) {
+			if (!(job instanceof BuildJob build)) {
+				throw new IllegalArgumentException("only copy and build jobs gather their materials");
+			}
+			gather(build, new BlockPos(r[9], r[10], r[11]), new BlockPos(r[12], r[13], r[14]));
+		}
 		BlockPos[] corners = job.corners();
 		for (BlockPos corner : corners) {
 			if (corner.distManhattan(player.blockPosition()) > JOB_REACH * 2 || Math.abs(corner.getX() - player.getBlockX()) > JOB_REACH
@@ -357,6 +363,23 @@ public final class Arena {
 		return new TaskReadyPayload(
 			req.requestId(), drone.getId(), corners[0], corners[0], start.x, start.y, start.z, drone.getYRot(), record.toJson().toString(), ""
 		);
+	}
+
+	/**
+	 * Has a copy or build job mine its materials from the box between a and b first. The box can't touch the copy's source,
+	 * which the drone must leave as it is, or the destination it builds in
+	 */
+	private static void gather(BuildJob job, BlockPos a, BlockPos b) {
+		BlockPos min = BlockPos.min(a, b);
+		BlockPos max = BlockPos.max(a, b);
+		DroneJob.checkSize(max.subtract(min).offset(1, 1, 1), MineJob.MAX_SIDE, "gather region");
+		if (job.sourceMin != null && DroneJob.overlaps(min, max, job.sourceMin, job.sourceMin.offset(job.target.size()).offset(-1, -1, -1))) {
+			throw new IllegalArgumentException("the gather region overlaps the copy's source, which the drone doesn't mine");
+		}
+		if (DroneJob.overlaps(min, max, job.dest, job.destMax())) {
+			throw new IllegalArgumentException("the gather region overlaps where the drone builds");
+		}
+		job.gatherFrom(min, max);
 	}
 
 	/** A schematic in the game's schematics folder, by plain file name only so a request can't reach outside it */

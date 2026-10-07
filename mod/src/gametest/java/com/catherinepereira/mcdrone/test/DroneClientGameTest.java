@@ -1,8 +1,10 @@
 package com.catherinepereira.mcdrone.test;
 
+import com.catherinepereira.mcdrone.ModContent;
 import com.catherinepereira.mcdrone.client.ClientRuntime;
 import com.catherinepereira.mcdrone.client.McDroneClient;
 import com.catherinepereira.mcdrone.client.hud.JobScreen;
+import com.catherinepereira.mcdrone.entity.DroneEntity;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import java.nio.file.Files;
@@ -12,6 +14,12 @@ import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext;
 import net.fabricmc.fabric.api.client.gametest.v1.context.TestSingleplayerContext;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.InactivityFpsLimit;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.inventory.ChestMenu;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 
 /**
  * Runs in a full game client: builds a superflat world, flies navigate_to over the bridge in lockstep
@@ -176,6 +184,18 @@ public class DroneClientGameTest implements FabricClientGameTest {
 			metrics = obs.header().getAsJsonObject("episode").getAsJsonArray("metrics");
 			check(metrics.get(1).getAsInt() == blueprint.size(), "schematic round trip lost blocks, metrics " + metrics);
 
+			// the same copy mining its materials from a box under the reference build, which the job hands the drone as gather
+			JsonArray gather = ints(rx - 1, ry - 6, rz - 1, rx + 1, ry - 4, rz + 1);
+			JsonObject gatherReset = msg("reset");
+			gatherReset.addProperty("id", id);
+			JsonObject gatherOptions = copyOptions.deepCopy();
+			gatherOptions.add("gather", gather);
+			gatherReset.add("options", gatherOptions);
+			bridge.send(gatherReset);
+			obs = awaitObs(ctx, bridge, id++);
+			JsonObject gatherJob = obs.header().getAsJsonObject("state").getAsJsonObject("job");
+			check(gatherJob != null && gather.equals(gatherJob.get("gather")), "expected the copy job to carry the gather box, got " + gatherJob);
+
 			JsonObject digReset = msg("reset");
 			digReset.addProperty("id", id);
 			digReset.addProperty("seed", 5);
@@ -281,6 +301,27 @@ public class DroneClientGameTest implements FabricClientGameTest {
 			ctx.waitTicks(5);
 			ctx.takeScreenshot("mcdrone-job-screen");
 			ctx.setScreen(() -> null);
+
+			// a player using the drone opens its inventory as a chest and can put items in
+			String chestProblem = world.getServer().computeOnServer(server -> {
+				ServerPlayer player = server.getPlayerList().getPlayers().getFirst();
+				ServerLevel level = (ServerLevel) player.level();
+				DroneEntity drone = level.getEntities(ModContent.DRONE, d -> d.isOwnedBy(player)).stream().findFirst().orElse(null);
+				if (drone == null) {
+					return "no drone";
+				}
+				drone.interact(player, InteractionHand.MAIN_HAND, drone.position());
+				if (!(player.containerMenu instanceof ChestMenu menu) || menu.getContainer() != drone.inventory) {
+					return "using the drone opened " + player.containerMenu + ", not its chest";
+				}
+				int before = drone.inventory.countItem(Items.DIRT);
+				player.getInventory().setItem(0, new ItemStack(Items.DIRT, 5));
+				// the first hotbar slot comes after the drone's 27 slots and the player's 27 main slots
+				menu.quickMoveStack(player, 27 + 27);
+				player.closeContainer();
+				return drone.inventory.countItem(Items.DIRT) == before + 5 ? "" : "the dirt didn't move into the drone";
+			});
+			check(chestProblem.isEmpty(), chestProblem);
 
 			JsonObject release = msg("release");
 			bridge.send(release);

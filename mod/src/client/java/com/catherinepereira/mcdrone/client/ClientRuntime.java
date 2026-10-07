@@ -814,18 +814,12 @@ public final class ClientRuntime {
 		// a mine job's box: "region" as 6 numbers or a saved region's name, else the selection's corners
 		if (options.has("region") && options.get("region").isJsonPrimitive()) {
 			String name = options.get("region").getAsString();
-			JsonObject found = null;
-			for (JsonElement e : this.regions) {
-				if (e.getAsJsonObject().get("name").getAsString().equalsIgnoreCase(name)) {
-					found = e.getAsJsonObject();
-				}
-			}
-			if (found == null) {
+			BlockPos[] box = this.namedRegion(name);
+			if (box == null) {
 				return "no saved region named " + name;
 			}
-			JsonArray box = found.getAsJsonArray("box");
-			sel.cornerA = new BlockPos(box.get(0).getAsInt(), box.get(1).getAsInt(), box.get(2).getAsInt());
-			sel.cornerB = new BlockPos(box.get(3).getAsInt(), box.get(4).getAsInt(), box.get(5).getAsInt());
+			sel.cornerA = box[0];
+			sel.cornerB = box[1];
 		}
 		if (options.has("region") && options.get("region").isJsonArray()) {
 			options.add("source", options.get("region"));
@@ -844,6 +838,31 @@ public final class ClientRuntime {
 				return "dest needs 3 numbers, x y z";
 			}
 			sel.dest = new BlockPos(d.get(0).getAsInt(), d.get(1).getAsInt(), d.get(2).getAsInt());
+		}
+		// a saved region as the destination, the build's min corner lands on the region's
+		if (options.has("dest") && options.get("dest").isJsonPrimitive()) {
+			BlockPos[] box = this.namedRegion(options.get("dest").getAsString());
+			if (box == null) {
+				return "no saved region named " + options.get("dest").getAsString();
+			}
+			sel.dest = BlockPos.min(box[0], box[1]);
+		}
+		// the box a copy or build mines its materials from: a saved region's name or 6 numbers
+		int[] gather = new int[0];
+		if (options.has("gather")) {
+			if (kind != TaskKind.COPY_REGION && kind != TaskKind.BUILD_SCHEMATIC) {
+				return "only copy and build jobs gather their materials";
+			}
+			JsonElement g = options.get("gather");
+			BlockPos[] box = g.isJsonPrimitive() ? this.namedRegion(g.getAsString()) : null;
+			if (g.isJsonArray() && g.getAsJsonArray().size() == 6) {
+				JsonArray a = g.getAsJsonArray();
+				box = new BlockPos[] {new BlockPos(a.get(0).getAsInt(), a.get(1).getAsInt(), a.get(2).getAsInt()), new BlockPos(a.get(3).getAsInt(), a.get(4).getAsInt(), a.get(5).getAsInt())};
+			}
+			if (box == null) {
+				return "gather needs a saved region's name or 6 numbers, x0 y0 z0 x1 y1 z1";
+			}
+			gather = new int[] {box[0].getX(), box[0].getY(), box[0].getZ(), box[1].getX(), box[1].getY(), box[1].getZ()};
 		}
 		if (kind == TaskKind.MINE_REGION || kind == TaskKind.HARVEST_REGION) {
 			if (subject.isEmpty()) {
@@ -864,14 +883,32 @@ public final class ClientRuntime {
 			if (sel.dest == null) {
 				return "set the paste point with sneak and right click";
 			}
-			this.jobRegionInts = new int[] {0, 0, 0, 0, 0, 0, sel.dest.getX(), sel.dest.getY(), sel.dest.getZ()};
+			this.jobRegionInts = withGather(new int[] {0, 0, 0, 0, 0, 0, sel.dest.getX(), sel.dest.getY(), sel.dest.getZ()}, gather);
 			return null;
 		}
 		String problem = sel.problem();
 		if (problem == null) {
-			this.jobRegionInts = sel.region();
+			this.jobRegionInts = withGather(sel.region(), gather);
 		}
 		return problem;
+	}
+
+	private static int[] withGather(int[] region, int[] gather) {
+		int[] out = java.util.Arrays.copyOf(region, region.length + gather.length);
+		System.arraycopy(gather, 0, out, region.length, gather.length);
+		return out;
+	}
+
+	/** A saved region's corners by name, ignoring case, or null */
+	private BlockPos @Nullable [] namedRegion(String name) {
+		for (JsonElement e : this.regions) {
+			JsonObject r = e.getAsJsonObject();
+			if (r.get("name").getAsString().equalsIgnoreCase(name)) {
+				JsonArray box = r.getAsJsonArray("box");
+				return new BlockPos[] {new BlockPos(box.get(0).getAsInt(), box.get(1).getAsInt(), box.get(2).getAsInt()), new BlockPos(box.get(3).getAsInt(), box.get(4).getAsInt(), box.get(5).getAsInt())};
+			}
+		}
+		return null;
 	}
 
 	// tool tasks take more steps: flying, mining, and container work

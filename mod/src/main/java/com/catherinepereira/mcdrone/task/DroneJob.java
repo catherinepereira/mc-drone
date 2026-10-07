@@ -26,6 +26,12 @@ public interface DroneJob {
 		}
 	}
 
+	/** Whether two inclusive boxes share a cell */
+	static boolean overlaps(BlockPos aMin, BlockPos aMax, BlockPos bMin, BlockPos bMax) {
+		return aMin.getX() <= bMax.getX() && bMin.getX() <= aMax.getX() && aMin.getY() <= bMax.getY() && bMin.getY() <= aMax.getY()
+			&& aMin.getZ() <= bMax.getZ() && bMin.getZ() <= aMax.getZ();
+	}
+
 	static boolean inside(BlockPos p, BlockPos min, BlockPos max) {
 		return p.getX() >= min.getX() && p.getX() <= max.getX() && p.getY() >= min.getY() && p.getY() <= max.getY() && p.getZ() >= min.getZ()
 			&& p.getZ() <= max.getZ();
