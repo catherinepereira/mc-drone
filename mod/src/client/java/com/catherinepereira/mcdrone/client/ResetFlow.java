@@ -66,7 +66,7 @@ final class ResetFlow {
 			return e.getMessage();
 		}
 		int radius = options.has("radius") ? options.get("radius").getAsInt() : config.radius;
-		int targets = options.has("targets") ? options.get("targets").getAsInt() : (kind == TaskKind.MINE_AND_DELIVER ? 3 : 1);
+		int targets = options.has("targets") ? options.get("targets").getAsInt() : kind == TaskKind.MINE_AND_DELIVER ? 3 : kind == TaskKind.HUNT_MOBS ? 4 : 1;
 		String terrain = options.has("terrain") ? options.get("terrain").getAsString() : config.terrain;
 		int obstacles = options.has("obstacles") ? options.get("obstacles").getAsInt() : config.obstacles;
 		int size = options.has("size") ? options.get("size").getAsInt() : 5;
@@ -167,10 +167,11 @@ final class ResetFlow {
 		JsonObject arena = JsonParser.parseString(ready.arena()).getAsJsonObject();
 		this.run.task.begin(
 			id, kind, pending.seed(), ready.marker(), arena, pending.maxSteps(), pending.successDist(), config.collisionPenalty, config.boundsPadding,
-			config.outOfBoundsPenalty
+			config.outOfBoundsPenalty, config.damagePenalty
 		);
 		this.run.tools.reset();
 		this.run.selectedSlot = 0;
+		this.runtime.syncFrozen();
 		if (this.run == this.runtime.active()) {
 			this.runtime.clearQueuedTools();
 		}

@@ -3,6 +3,7 @@ package com.catherinepereira.mcdrone.client.obs;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.world.entity.EntityType;
 import org.jspecify.annotations.Nullable;
 
 /** Names by raw id for the mask stream and the inventory, sent once in the bridge's welcome */
@@ -13,7 +14,7 @@ public final class IdTables {
 	private IdTables() {
 	}
 
-	/** blocks[i] is mask id i + 1, entities[j] is id entityBase + j */
+	/** blocks[i] is mask id i + 1, entities[j] is id entityBase + j, categories[j] is that entity's mob category */
 	public static JsonObject maskIds() {
 		if (maskIds == null) {
 			JsonObject json = new JsonObject();
@@ -22,12 +23,16 @@ public final class IdTables {
 				blocks.add(BuiltInRegistries.BLOCK.getKey(BuiltInRegistries.BLOCK.byId(i)).toString());
 			}
 			JsonArray entities = new JsonArray();
+			JsonArray categories = new JsonArray();
 			for (int i = 0; i < BuiltInRegistries.ENTITY_TYPE.size(); i++) {
-				entities.add(BuiltInRegistries.ENTITY_TYPE.getKey(BuiltInRegistries.ENTITY_TYPE.byId(i)).toString());
+				EntityType<?> type = BuiltInRegistries.ENTITY_TYPE.byId(i);
+				entities.add(BuiltInRegistries.ENTITY_TYPE.getKey(type).toString());
+				categories.add(type.getCategory().getSerializedName());
 			}
 			json.add("blocks", blocks);
 			json.addProperty("entityBase", Raycaster.ENTITY_BASE);
 			json.add("entities", entities);
+			json.add("categories", categories);
 			maskIds = json;
 		}
 		return maskIds;

@@ -132,6 +132,21 @@ export function LiveView() {
                   ? `, ${episode.droneCollisions} with drones`
                   : ""}
               </Row>
+              {episode.patrol && (
+                <Row label="Patrol">
+                  {episode.patrol.visited} of {episode.patrol.cells} cells,
+                  round{" "}
+                  {Math.min(episode.patrol.round + 1, episode.patrol.rounds)} of{" "}
+                  {episode.patrol.rounds}
+                </Row>
+              )}
+              {(episode.task === "hunt_mobs" ||
+                episode.task === "guard_region") &&
+                episode.metrics && (
+                  <Row label="Hostile mobs">
+                    {episode.metrics[1]} killed, {episode.metrics[0]} left
+                  </Row>
+                )}
               <Row label="Marker">{vec(state?.marker ?? undefined, 0)}</Row>
             </>
           ) : (

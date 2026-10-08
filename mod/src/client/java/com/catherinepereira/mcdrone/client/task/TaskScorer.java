@@ -6,6 +6,8 @@ import com.catherinepereira.mcdrone.task.TrainingArenas;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.function.Predicate;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.phys.Vec3;
@@ -44,10 +46,30 @@ public final class TaskScorer {
 	private double[] bounds = new double[6];
 	private double outOfBoundsPenalty;
 	private boolean outOfBounds;
+	// health lost to mobs, at damagePenalty per point, and whether the drone was wrecked, which ends the episode
+	private double damagePenalty;
+	private float lastHealth = -1;
+	private float damage;
+	private boolean wrecked;
+	// a patrol's cells as x, z, the ones visited this round, and the rounds flown, see PatrolJob
+	private List<double[]> patrolCells = List.of();
+	private boolean[] visited = new boolean[0];
+	private double visitRadius;
+	private int rounds;
+	private int roundsDone;
+	// a goto's point, a follow's target entity and band, and ticks spent in the band
+	private @Nullable Vec3 point;
+	private double arrive;
+	private int followTarget = -1;
+	private double near;
+	private double far;
+	private int followTicks;
+	private int inBand;
+	private double prevBandGap = -1;
 
 	public void begin(
 		String episodeId, TaskKind kind, long seed, BlockPos marker, JsonObject arena, int maxSteps, double successDist, double collisionPenalty,
-		int boundsPadding, double outOfBoundsPenalty
+		int boundsPadding, double outOfBoundsPenalty, double damagePenalty
 	) {
 		JsonArray origin = arena.getAsJsonArray("origin");
 		int radius = arena.get("radius").getAsInt() + boundsPadding;
@@ -64,6 +86,10 @@ public final class TaskScorer {
 		}
 		this.outOfBoundsPenalty = outOfBoundsPenalty;
 		this.outOfBounds = false;
+		this.damagePenalty = damagePenalty;
+		this.lastHealth = -1;
+		this.damage = 0;
+		this.wrecked = false;
 		this.active = true;
 		this.episodeId = episodeId;
 		this.kind = kind;
@@ -82,6 +108,57 @@ public final class TaskScorer {
 		this.success = false;
 		this.truncated = false;
 		this.metrics = new int[0];
+		this.patrolCells = new ArrayList<>();
+		this.rounds = 0;
+		this.roundsDone = 0;
+		JsonObject job = arena.has("job") ? arena.getAsJsonObject("job") : null;
+		if (job != null && job.has("cells")) {
+			for (JsonElement cell : job.getAsJsonArray("cells")) {
+				this.patrolCells.add(new double[] {cell.getAsJsonArray().get(0).getAsDouble(), cell.getAsJsonArray().get(1).getAsDouble()});
+			}
+			this.rounds = job.get("rounds").getAsInt();
+			this.visitRadius = job.get("visitRadius").getAsDouble();
+		}
+		this.visited = new boolean[this.patrolCells.size()];
+		this.point = job != null && job.has("point") ? Vec3.atCenterOf(Json.readPos(job.getAsJsonArray("point"))) : null;
+		this.arrive = job != null && job.has("arrive") ? job.get("arrive").getAsDouble() : 0;
+		this.followTarget = job != null && job.has("target") ? job.get("target").getAsInt() : -1;
+		this.near = job != null && job.has("near") ? job.get("near").getAsDouble() : 0;
+		this.far = job != null && job.has("far") ? job.get("far").getAsDouble() : 0;
+		this.followTicks = job != null && job.has("ticks") ? job.get("ticks").getAsInt() : 0;
+		this.inBand = 0;
+		this.prevBandGap = -1;
+	}
+
+	/** The entity a follow keeps up with, -1 for other tasks */
+	public int followTarget() {
+		return this.followTarget;
+	}
+
+	/**
+	 * One tick of a follow: closing the gap to the band between near and far earns its distance, each tick in the band
+	 * earns a share of 10, and a training arena's follow succeeds after followTicks of them. A player's never ends on its own
+	 */
+	public void follow(Vec3 drone, @Nullable Vec3 target) {
+		if (!this.active || this.done() || target == null) {
+			return;
+		}
+		double d = drone.distanceTo(target);
+		double gap = Math.max(0, d - this.far) + Math.max(0, this.near - d);
+		double reward = this.prevBandGap >= 0 ? this.prevBandGap - gap : 0;
+		this.prevBandGap = gap;
+		if (gap == 0) {
+			this.inBand++;
+			reward += this.followTicks > 0 ? 10.0 / this.followTicks : 0;
+		}
+		this.goal = target;
+		this.prevDist = gap;
+		if (this.followTicks > 0 && this.inBand >= this.followTicks) {
+			this.succeed();
+			reward += SUCCESS_BONUS;
+		}
+		this.stepReward += reward;
+		this.totalReward += reward;
 	}
 
 	public void end() {
@@ -93,7 +170,22 @@ public final class TaskScorer {
 	}
 
 	public boolean done() {
-		return this.success || this.truncated || this.outOfBounds;
+		return this.success || this.truncated || this.outOfBounds || this.wrecked;
+	}
+
+	/** The drone's health once a tick: lost health costs damagePenalty a point, and a wreck ends the episode like leaving the geofence */
+	public void health(float health, boolean wrecked) {
+		if (this.active && !this.done() && this.lastHealth > health) {
+			double reward = -this.damagePenalty * (this.lastHealth - health);
+			this.damage += this.lastHealth - health;
+			if (wrecked) {
+				this.wrecked = true;
+				reward -= this.outOfBoundsPenalty;
+			}
+			this.stepReward += reward;
+			this.totalReward += reward;
+		}
+		this.lastHealth = health;
 	}
 
 	public double[] bounds() {
@@ -146,8 +238,9 @@ public final class TaskScorer {
 			return;
 		}
 		Vec3 target = this.currentGoal(droneCenter, isTarget);
+		boolean reaching = this.kind == TaskKind.NAVIGATE_TO || this.point != null || this.kind == TaskKind.FIND_BLOCK || this.kind == TaskKind.SEEK_BLOCK;
 		if (target != null) {
-			double standoff = this.kind == TaskKind.NAVIGATE_TO ? 0 : TOOL_STANDOFF;
+			double standoff = reaching ? 0 : TOOL_STANDOFF;
 			double dist = Math.max(0, droneCenter.distanceTo(target) - standoff);
 			if (this.goal != null && this.goal.equals(target)) {
 				reward += this.prevDist - dist;
@@ -156,6 +249,15 @@ public final class TaskScorer {
 			this.prevDist = dist;
 		}
 		if (this.kind == TaskKind.NAVIGATE_TO && target != null && droneCenter.distanceTo(target) <= this.successDist) {
+			this.succeed();
+			reward += SUCCESS_BONUS;
+		}
+		if (reaching && this.kind != TaskKind.NAVIGATE_TO && target != null && droneCenter.distanceTo(target) <= this.arrive) {
+			this.succeed();
+			reward += SUCCESS_BONUS;
+		}
+		reward += this.patrol(droneCenter);
+		if (!this.success && this.patrolled()) {
 			this.succeed();
 			reward += SUCCESS_BONUS;
 		}
@@ -213,16 +315,62 @@ public final class TaskScorer {
 				reward -= 1.0 * (next[2] - prev[2]);
 				won = next[0] >= next[1] && next[2] == 0;
 			}
+			case HUNT_MOBS, GUARD_REGION -> {
+				reward += 10.0 * (next[1] - prev[1]) / Math.max(1, next[2]);
+				// a guard also flies its rounds, see patrolled
+				won = this.kind == TaskKind.HUNT_MOBS && next[0] == 0;
+			}
 			default -> {
 			}
 		}
 		this.metrics = next;
+		won |= this.patrolled();
 		if (won) {
 			this.succeed();
 			reward += SUCCESS_BONUS;
 		}
 		this.stepReward += reward;
 		this.totalReward += reward;
+	}
+
+	// marks the patrol cells the drone is over, and starts the next round once every one is, returns the reward
+	private double patrol(Vec3 p) {
+		if (this.patrolCells.isEmpty() || this.roundsDone >= this.rounds) {
+			return 0;
+		}
+		double reward = 0;
+		boolean all = true;
+		for (int i = 0; i < this.visited.length; i++) {
+			double[] c = this.patrolCells.get(i);
+			if (!this.visited[i] && Math.hypot(p.x - c[0], p.z - c[1]) <= this.visitRadius) {
+				this.visited[i] = true;
+				reward += 10.0 / (this.visited.length * this.rounds);
+			}
+			all &= this.visited[i];
+		}
+		if (all) {
+			this.roundsDone++;
+			java.util.Arrays.fill(this.visited, false);
+		}
+		return reward;
+	}
+
+	// a patrol flew every round, and a guard's region has no hostile mob left
+	private boolean patrolled() {
+		boolean flown = this.rounds > 0 && this.roundsDone >= this.rounds;
+		return switch (this.kind) {
+			case PATROL_AREA, PATROL_REGION -> flown;
+			case GUARD_REGION -> flown && this.metrics.length >= 1 && this.metrics[0] == 0;
+			default -> false;
+		};
+	}
+
+	private int visitedCount() {
+		int n = 0;
+		for (boolean v : this.visited) {
+			n += v ? 1 : 0;
+		}
+		return n;
 	}
 
 	private boolean inBounds(Vec3 p) {
@@ -260,8 +408,14 @@ public final class TaskScorer {
 				Vec3 next = loaded ? null : this.nearestTarget(drone, isTarget);
 				yield next != null ? next : point("targetChest");
 			}
-			// no distance shaping, the drone has to study the reference before heading to the build site
-			case REPLICATE_BUILD, COPY_REGION, BUILD_SCHEMATIC, MINE_REGION, HARVEST_CROPS, HARVEST_REGION, COPY_BUILD, SCHEMATIC_BUILD, MINE_DEPOSIT, GATHER_BUILD -> null;
+			// no distance shaping, the drone has to study the reference before heading to the build site, or find what it hunts
+			case REPLICATE_BUILD, COPY_REGION, BUILD_SCHEMATIC, MINE_REGION, HARVEST_CROPS, HARVEST_REGION, COPY_BUILD, SCHEMATIC_BUILD, MINE_DEPOSIT, GATHER_BUILD,
+				PATROL_AREA, HUNT_MOBS, PATROL_REGION, GUARD_REGION -> null;
+			case GOTO_POINT, FLY_TO -> this.point;
+			// the nearest block of the kind, the drone has to find them, the reward knows where they are
+			case FIND_BLOCK, SEEK_BLOCK -> this.nearestTarget(drone, p -> true);
+			// see follow
+			case FOLLOW_MOB, FOLLOW_PLAYER -> null;
 		};
 	}
 
@@ -298,11 +452,24 @@ public final class TaskScorer {
 		json.addProperty("collisions", this.collisions);
 		json.addProperty("droneCollisions", this.droneCollisions);
 		json.addProperty("outOfBounds", this.outOfBounds);
+		json.addProperty("damage", this.damage);
+		json.addProperty("wrecked", this.wrecked);
 		JsonArray m = new JsonArray();
 		for (int v : this.metrics) {
 			m.add(v);
 		}
 		json.add("metrics", m);
+		if (this.followTarget >= 0) {
+			json.addProperty("inBand", this.inBand);
+		}
+		if (!this.patrolCells.isEmpty()) {
+			JsonObject patrol = new JsonObject();
+			patrol.addProperty("visited", this.visitedCount());
+			patrol.addProperty("cells", this.patrolCells.size());
+			patrol.addProperty("round", this.roundsDone);
+			patrol.addProperty("rounds", this.rounds);
+			json.add("patrol", patrol);
+		}
 		return json;
 	}
 }

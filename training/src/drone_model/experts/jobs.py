@@ -16,6 +16,8 @@ from ..energy import fly_home
 from ..perception.memory import AIR, MIN_VOTES, Cell, VoxelMemory
 from ..perception.reader import CLASSES, INDEX, OTHER, SKY
 from .arena import HarvestExpert, make_expert
+from .goto import GotoPlanner
+from .patrol import PatrolPlanner
 from .base import SURVEY_LIMIT, TOP_LEAN, TOP_VIA_HEIGHT, VIA_DIST, HonestExpert, center, tool_action
 
 VIEW_SPACING = 4.0
@@ -790,4 +792,8 @@ def make_planner(job: dict, mask_ids: dict, reader, schematics: Path | None = No
         return BuildPlanner(mask_ids, reader=reader, schematics=schematics)
     if job["kind"] == "mine":
         return MinePlanner(mask_ids, reader=reader, schematics=schematics)
+    if job["kind"] == "patrol":
+        return PatrolPlanner(mask_ids, reader=reader)
+    if job["kind"] in ("goto", "find", "follow"):
+        return GotoPlanner(mask_ids, reader=reader)
     return HarvestPlanner(mask_ids, reader=reader, schematics=schematics)

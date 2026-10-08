@@ -85,6 +85,8 @@ public final class ClientRuntime {
 	private DroneRun active;
 
 	private Mode mode = Mode.REALTIME;
+	// what the server was last told, see syncFrozen
+	private boolean frozen;
 	private boolean hudVisible = true;
 	private long tick;
 	private long lastMetricsMs;
@@ -531,10 +533,11 @@ public final class ClientRuntime {
 		}
 		JsonObject job = options.deepCopy();
 		job.addProperty("label", JobOptions.label(kind, options, subject));
-		if (!job.has("region") && (kind == TaskKind.COPY_REGION || kind == TaskKind.MINE_REGION || kind == TaskKind.HARVEST_REGION)) {
+		if (!job.has("region") && (kind == TaskKind.COPY_REGION || kind == TaskKind.MINE_REGION || kind == TaskKind.HARVEST_REGION
+			|| kind == TaskKind.PATROL_REGION || kind == TaskKind.GUARD_REGION || kind == TaskKind.SEEK_BLOCK)) {
 			job.add("source", Json.box(this.selection.cornerA, this.selection.cornerB));
 		}
-		if (!job.has("dest") && (kind == TaskKind.COPY_REGION || kind == TaskKind.BUILD_SCHEMATIC)) {
+		if (!job.has("dest") && (kind == TaskKind.COPY_REGION || kind == TaskKind.BUILD_SCHEMATIC || kind == TaskKind.FLY_TO)) {
 			job.add("dest", Json.pos(this.selection.dest));
 		}
 		JsonObject edit = new JsonObject();
@@ -756,13 +759,19 @@ public final class ClientRuntime {
 			this.metrics.simStep();
 			run.controller.sendPose();
 			ToolRequest request = i == 0 ? action.tools() : action.tools().continued();
-			// an idle tick still goes out while mining, so the server can cancel the crack
-			if (!request.idle() || run.tools.breakProgress() > 0) {
+			// an idle tick still goes out while mining or beaming, so the server can cancel the crack or the beam
+			DroneEntity beaming = run.drone();
+			if (!request.idle() || run.tools.breakProgress() > 0 || (beaming != null && beaming.beamTarget() >= 0)) {
 				lastSeq = this.sendTool(run, request);
 			}
 			DroneEntity drone = run.drone();
 			if (drone != null) {
 				run.task.update(drone.getBoundingBox().getCenter(), collided, run.controller.lastHitDrone(), this::isTargetBlock);
+				run.task.health(drone.getHealth(), drone.wrecked());
+				if (run.task.followTarget() >= 0 && this.mc.level != null) {
+					Entity target = this.mc.level.getEntity(run.task.followTarget());
+					run.task.follow(drone.getBoundingBox().getCenter(), target == null ? null : target.getBoundingBox().getCenter());
+				}
 				if (run.task.active() && run.task.kind() == TaskKind.RETURN_HOME && drone.docked()) {
 					run.task.complete();
 				}
@@ -847,6 +856,7 @@ public final class ClientRuntime {
 		JsonObject snap = run.task.snapshot();
 		this.log.info("task.done", snap);
 		run.task.end();
+		this.syncFrozen();
 		if (run.task.kind().isJob()) {
 			run.finishedJob = run.task.kind();
 			run.finishedJobSucceeded = snap.has("success") && snap.get("success").getAsBoolean();
@@ -936,15 +946,26 @@ public final class ClientRuntime {
 		}
 	}
 
+	/**
+	 * Lockstep freezes the server so the world waits for the drones, except while a drone hunts or follows. Its target has
+	 * to move, and the client only sees it move in a running world
+	 */
+	void syncFrozen() {
+		boolean hunting = this.runs.stream().anyMatch(r -> r.task.active() && r.task.kind().needsLiveWorld());
+		boolean frozen = this.mode == Mode.LOCKSTEP && !hunting;
+		if (frozen != this.frozen && ClientPlayNetworking.canSend(SetFrozenPayload.TYPE)) {
+			this.frozen = frozen;
+			ClientPlayNetworking.send(new SetFrozenPayload(frozen));
+		}
+	}
+
 	public void setMode(Mode mode) {
 		if (this.mode == mode) {
 			return;
 		}
 		this.mode = mode;
 		this.runs.forEach(run -> run.setBridgeAction(DroneAction.ZERO));
-		if (ClientPlayNetworking.canSend(SetFrozenPayload.TYPE)) {
-			ClientPlayNetworking.send(new SetFrozenPayload(mode == Mode.LOCKSTEP));
-		}
+		this.syncFrozen();
 		this.log.info("mode.change", DroneLog.fields("mode", mode.name().toLowerCase()));
 		if (mode == Mode.REALTIME) {
 			this.restoreCamera();
@@ -1036,7 +1057,7 @@ public final class ClientRuntime {
 	}
 
 	public JsonObject stateJson(DroneRun run) {
-		return StateJson.of(this.mc, run.controller, run.task, run.tools, run.selectedSlot);
+		return StateJson.of(this.mc, run.controller, run.task, run.tools, run.selectedSlot, this.config.sensorRange);
 	}
 
 	public DroneAction lastAction(DroneRun run) {

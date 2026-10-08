@@ -1,6 +1,6 @@
 from drone_model.experts.jobs import BuildPlanner, base_name, box_views
 
-MASK_IDS = {"blocks": ["minecraft:stone", "minecraft:bricks"], "entities": ["mcdrone:drone"], "entityBase": 32768}
+MASK_IDS = {"blocks": ["minecraft:stone", "minecraft:bricks"], "entities": ["mcdrone:drone", "minecraft:zombie", "minecraft:cow"], "categories": ["misc", "monster", "creature"], "entityBase": 32768}
 JOB = {"kind": "copy", "source": [0, 1, 0, 2, 3, 2], "dest": [10, 1, 0, 12, 3, 2], "size": [3, 3, 3]}
 
 

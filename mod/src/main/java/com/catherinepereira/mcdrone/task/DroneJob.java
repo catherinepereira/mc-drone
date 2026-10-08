@@ -19,6 +19,11 @@ public interface DroneJob {
 	/** The boxes the job works in, as inclusive min and max corners, for the geofence and the reach check */
 	BlockPos[] corners();
 
+	/** Whether the job breaks or places blocks, two jobs that do can't share a block */
+	default boolean changesBlocks() {
+		return true;
+	}
+
 	/** Throws when a box of this size is longer than maxSide on any side, what names the box in the message */
 	static void checkSize(Vec3i size, int maxSide, String what) {
 		if (size.getX() > maxSide || size.getY() > maxSide || size.getZ() > maxSide) {

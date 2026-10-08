@@ -14,7 +14,8 @@ import numpy as np
 from mcdrone import DroneEnv
 from PIL import Image, ImageDraw, ImageFont
 
-from ..agents import Pilot, outcome
+from ..framework.evaluate import Runner, outcome
+from ..framework.registry import POLICIES
 from ..paths import CHECKPOINTS, VIDEOS
 from ..perception.reader import Reader
 
@@ -139,11 +140,11 @@ def frame_size(chase: bool) -> tuple[int, int]:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--task", default="navigate_to")
-    parser.add_argument("--perception", choices=["reader", "mask"], default="reader", help="what experts see with, mask is the mod's ground truth")
-    parser.add_argument("--skill", type=Path, default=None, help="a cell skill checkpoint to fly, aim, and fire for the expert's planner")
+    parser.add_argument("--teacher-sees", choices=["reader", "mask"], default="reader", help="what the teacher sees with, mask is the mod's ground truth")
     parser.add_argument("--reader", type=Path, default=CHECKPOINTS / "reader.pt")
-    parser.add_argument("--policy", choices=["expert", "bc", "seq"], default="expert")
-    parser.add_argument("--checkpoint", type=Path, default=CHECKPOINTS / "ppo.pt")
+    parser.add_argument("--policy", choices=list(POLICIES), default="skill")
+    parser.add_argument("--checkpoint", type=Path, default=None, help="checkpoints/<policy>.pt by default")
+    parser.add_argument("--teacher", action="store_true", help="film the policy's teacher alone, the scripted expert or job planner")
     parser.add_argument("--episodes", type=int, default=3)
     parser.add_argument("--seed", type=int, default=300_000)
     parser.add_argument("--obstacles", type=int, default=8)
@@ -151,17 +152,14 @@ def main() -> None:
     parser.add_argument("--size", type=int, default=5, help="structure or deposit side for the copy, build, and mine arenas")
     parser.add_argument("--scan", action="store_true", help="scan perception, the server hands the planner each job box read from the world")
     parser.add_argument("--view",choices=["chase", "drone"], default="chase", help="chase films the drone from behind, drone shows its own camera")
-    parser.add_argument("--tier", choices=["copper", "iron", "diamond"], default=None, help="fly a drone of this tier, it sets how fast blocks break")
+    parser.add_argument("--tier", choices=["copper", "iron", "diamond", "netherite"], default=None, help="fly a drone of this tier, it sets how fast blocks break")
     parser.add_argument("--name", default=None)
     parser.add_argument("--out", type=Path, default=VIDEOS)
     args = parser.parse_args()
-    try:
-        pilot = Pilot(args.policy, args.task, args.checkpoint, Reader(args.reader) if args.perception == "reader" else None, args.skill)
-    except ValueError as e:
-        raise SystemExit(str(e))
+    runner = Runner(args.policy, args.checkpoint, args.teacher, Reader(args.reader) if args.teacher_sees == "reader" else None)
     env = DroneEnv(
         task=args.task,
-        tools=args.policy in ("expert", "seq") or None,
+        tools=True,
         # the frames the reader and skill were trained on, upscaled for the video
         width=AGENT_W,
         height=AGENT_H,
@@ -171,7 +169,7 @@ def main() -> None:
         action_pause_ms=0,
     )
     args.out.mkdir(parents=True, exist_ok=True)
-    name = args.name or f"{args.task}-{args.policy if args.policy == 'expert' else args.checkpoint.stem}-o{args.obstacles}-{args.terrain}"
+    name = args.name or f"{args.task}-{'teacher' if args.teacher else runner.checkpoint.stem}-o{args.obstacles}-{args.terrain}"
     path = args.out / f"{name}.mp4"
     try:
         font = ImageFont.truetype("arial.ttf", 15)
@@ -189,11 +187,11 @@ def main() -> None:
         for i in range(args.episodes):
             obs, info = env.reset(seed=args.seed + i)
             job = info["state"].get("job")
-            agent = pilot.start(env.client.mask_ids, info)
-            if args.policy != "expert":
-                label = f"{args.checkpoint.stem} policy, vision only"
-            elif args.skill is not None:
+            runner.start(args.task, info, env.client.mask_ids)
+            if not args.teacher and args.policy == "skill":
                 label = f"planner plus learned cell skill, {blocks}"
+            elif not args.teacher:
+                label = f"{runner.checkpoint.stem} policy, vision only"
             elif job:
                 label = f"job planner, scripted flight, {blocks}"
             else:
@@ -206,7 +204,7 @@ def main() -> None:
                 ffmpeg.stdin.write(compose(obs, info, title, font).tobytes())
                 if terminated or truncated:
                     break
-                obs, reward, terminated, truncated, info = env.step(agent.act(info["state"], obs))
+                obs, reward, terminated, truncated, info = env.step(runner.act(info["state"], obs))
             # hold the last frame for a second so the outcome is readable
             for _ in range(FPS):
                 ffmpeg.stdin.write(compose(obs, info, title, font).tobytes())

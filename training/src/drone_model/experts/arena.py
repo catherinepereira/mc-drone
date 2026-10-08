@@ -15,6 +15,8 @@ from ..perception.blocks import BUILD_PALETTE
 from ..perception.memory import VoxelMemory
 from ..perception.reader import CLASSES, SKY
 from ..perception.worldmap import perceivable
+from .goto import GotoPlanner
+from .patrol import PatrolPlanner
 from .base import (
     AIM_TOLERANCE, SURVEY_DWELL, SURVEY_LIMIT, TURN_GAIN, HonestExpert, aim_angle, aim_errors, carried, center, place_viewpoint, tool_action,
 )
@@ -448,6 +450,11 @@ EXPERTS = {
     "replicate_build": BuildExpert,
     "harvest_crops": HarvestExpert,
     "harvest_region": HarvestExpert,
+    "patrol_area": PatrolPlanner,
+    "hunt_mobs": PatrolPlanner,
+    "goto_point": GotoPlanner,
+    "find_block": GotoPlanner,
+    "follow_mob": GotoPlanner,
 }
 
 

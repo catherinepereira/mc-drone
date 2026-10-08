@@ -1,7 +1,8 @@
 ﻿# Records block reader training frames (rgb, depth, mask, and the state labels) across tasks and terrains, one collection at a time
 # Seeds start at 200000, clear of demo (0 and up) and evaluation (100000 and up) seeds
-# -Set structures records only the larger copy, build, mine, and gather arenas
-param([ValidateSet("all", "base", "structures")][string]$Set = "all")
+# -Set structures records only the larger copy, build, mine, and gather arenas, -Set mobs the hunt and patrol arenas, flown
+# with the mod's mask so the experts see mobs before the reader can
+param([ValidateSet("all", "base", "structures", "mobs")][string]$Set = "all")
 $model = Split-Path $PSScriptRoot -Parent
 $python = Join-Path $model ".venv\Scripts\python.exe"
 $base = @(
@@ -20,9 +21,17 @@ $structures = @(
   @{ task = "gather_build"; terrain = "flat"; episodes = 8; seed = 210000; steps = 1500; size = 5 },
   @{ task = "mine_deposit"; terrain = "rough"; episodes = 8; seed = 211000; steps = 1500; size = 6 }
 )
-$runs = switch ($Set) { "base" { $base } "structures" { $structures } default { $base + $structures } }
+$mobs = @(
+  @{ task = "hunt_mobs"; terrain = "flat"; episodes = 40; seed = 212000; steps = 1500; size = 5; perception = "mask" },
+  @{ task = "hunt_mobs"; terrain = "rough"; episodes = 30; seed = 213000; steps = 1500; size = 5; perception = "mask" },
+  @{ task = "hunt_mobs"; terrain = "cave"; episodes = 30; seed = 214000; steps = 1500; size = 5; perception = "mask" },
+  @{ task = "patrol_area"; terrain = "flat"; episodes = 15; seed = 215000; steps = 800; size = 5; perception = "mask" },
+  @{ task = "patrol_area"; terrain = "rough"; episodes = 15; seed = 216000; steps = 800; size = 5; perception = "mask" }
+)
+$runs = switch ($Set) { "base" { $base } "structures" { $structures } "mobs" { $mobs } default { $base + $structures + $mobs } }
 foreach ($r in $runs) {
   "$(Get-Date -Format HH:mm:ss) $($r.task) $($r.terrain) x$($r.episodes)"
-  & $python -m drone_model.collect.demos --task $r.task --terrain $r.terrain --size $r.size --episodes $r.episodes --seed $r.seed --obstacles 4 --noise 0.15 --streams "rgb,depth,mask,state" --max-steps $r.steps 2>&1 | Select-String "success rate|Traceback|Error"
+  $perception = if ($r.perception) { $r.perception } else { "reader" }
+  & $python -m drone_model.collect.demos --task $r.task --terrain $r.terrain --size $r.size --episodes $r.episodes --seed $r.seed --obstacles 4 --noise 0.15 --streams "rgb,depth,mask,state" --max-steps $r.steps --perception $perception 2>&1 | Select-String "success rate|Traceback|Error"
 }
 "$(Get-Date -Format HH:mm:ss) done"

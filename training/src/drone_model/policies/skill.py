@@ -1,6 +1,7 @@
 """
-The cell skill: one learned controller for every job. Given a goal (look at a point from a viewpoint, or break or
-place at a point) it flies, aims, and decides when to fire the tool, from the camera image and depth alone.
+The cell skill: one learned controller for every job. Given a goal (look at a point from a viewpoint, break or
+place at a point, or hit the mob at a point) it flies, aims, and decides when to fire the tool, from the camera image
+and depth alone.
 A planner (the experts' decide logic over the voxel memory) picks the goals
 """
 
@@ -11,12 +12,14 @@ import math
 import numpy as np
 import torch
 from torch import nn
+from torch.nn import functional as F
 
+from ..framework.spec import Agent, PolicySpec, Step
 from ..torch_utils import load_weights, pick_device
 from .seq import DEPTH_MAX, conv, frame_features, state_features
 
-MODES = ("view", "break", "place")
-GOAL_DIM = 10
+MODES = ("view", "break", "place", "attack")
+GOAL_DIM = 11
 STATE_DIM = 12
 GOAL_SCALE = 8.0
 
@@ -87,17 +90,27 @@ def frame(obs: dict) -> tuple[np.ndarray, np.ndarray]:
     return rgb, depth
 
 
-class SkillAgent:
-    """A trained SkillPolicy behind the experts' skill hook"""
+class SkillAgent(Agent):
+    """A trained SkillPolicy, behind the experts' skill hook or flying its teacher's goals in the framework"""
 
-    def __init__(self, checkpoint, device: torch.device | None = None) -> None:
-        self.device = device or pick_device()
-        self.model = SkillPolicy().to(self.device)
-        load_weights(self.model, checkpoint, self.device)
-        self.model.eval()
+    def __init__(self, model: SkillPolicy) -> None:
+        self.model = model
+        self.device = next(model.parameters()).device
+
+    @classmethod
+    def load(cls, checkpoint, device: torch.device | None = None) -> "SkillAgent":
+        device = device or pick_device()
+        model = SkillPolicy().to(device)
+        load_weights(model, checkpoint, device)
+        return cls(model.eval())
+
+    def act(self, step: Step) -> dict:
+        """The skill flies the teacher's goal, and on steps without one (an errand, a pause) the teacher's own action stands"""
+        intent = step.teacher.intent if step.teacher is not None else None
+        return self.fly(step.state, step.obs, intent) if intent is not None else step.label
 
     @torch.no_grad()
-    def act(self, state: dict, obs: dict, intent: dict) -> dict:
+    def fly(self, state: dict, obs: dict, intent: dict) -> dict:
         from ..experts.base import tool_action
 
         rgb, depth = frame(obs)
@@ -111,8 +124,59 @@ class SkillAgent:
         return tool_action(move, intent["mode"] if firing else "none", block=intent.get("block"))
 
 
+class SkillSpec(PolicySpec):
+    """
+    Learns from the job planners: every step where the planner has a goal becomes a row, labeled with the scripted
+    controller's clean action. Under DAgger the skill flies a share of those steps and the planner still labels them
+    """
+
+    name = "skill"
+    stride = 2
+
+    def model(self) -> nn.Module:
+        return SkillPolicy()
+
+    def record(self, step: Step) -> dict[str, np.ndarray] | None:
+        from ..experts.base import TOOLS
+
+        intent = step.teacher.intent if step.teacher is not None else None
+        if intent is None:
+            return None
+        rgb, depth = frame(step.obs)
+        fired = TOOLS[step.label["tool"]] in ("break", "place", "attack")
+        return {
+            "rgb": rgb, "depth": depth, "state": state_features(step.state), "goal": goal_features(step.state, intent),
+            "move": np.asarray(step.label["move"], dtype=np.float32), "fire": np.float32(1.0 if fired else 0.0),
+        }
+
+    def loss(self, model: nn.Module, b: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        move, fire = model(b["rgb"], b["depth"], b["state"], b["goal"])
+        # firing only matters for goals that use the tool, the goal ends in the mode's one-hot
+        acting = b["goal"][:, -len(MODES)] < 0.5
+        move_loss = F.mse_loss(move.float(), b["move"])
+        fire_loss = F.binary_cross_entropy_with_logits(fire.float()[acting], b["fire"][acting]) if acting.any() else move_loss * 0
+        pred = (fire.float() > 0) & acting
+        fired = b["fire"] > 0.5
+        recall = (pred & fired).sum() / fired.sum().clamp(min=1)
+        precision = (pred & fired).sum() / pred.sum().clamp(min=1)
+        return {"loss": move_loss + fire_loss, "move": move_loss, "fire": fire_loss, "fire_recall": recall, "fire_precision": precision}
+
+    def agent(self, model: nn.Module, mask_ids: dict) -> Agent:
+        return SkillAgent(model)
+
+
+class SkillHook:
+    """The planner's skill hook: the planner names the goal, the skill flies it"""
+
+    def __init__(self, agent: SkillAgent) -> None:
+        self.agent = agent
+
+    def act(self, state: dict, obs: dict, intent: dict) -> dict:
+        return self.agent.fly(state, obs, intent)
+
+
 def with_skill(expert, checkpoint):
     """Hands an expert's flying, aiming, and firing to a trained skill, its planner keeps choosing the goals"""
     if checkpoint is not None:
-        expert.skill = SkillAgent(checkpoint)
+        expert.skill = SkillHook(SkillAgent.load(checkpoint))
     return expert

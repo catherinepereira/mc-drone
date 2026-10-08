@@ -44,6 +44,10 @@ public final class Config {
 	// geofence: the arena footprint from its floor up to the cleared height, widened by boundsPadding blocks
 	public int boundsPadding = 0;
 	public float outOfBoundsPenalty = 10.0F;
+	// reward lost per point of health a mob takes off the drone, a drone has 20
+	public float damagePenalty = 0.5F;
+	// how far the drone's range sensors reach, ahead and below, see StateJson
+	public float sensorRange = 4.0F;
 	// "inventory" places from the drone's stacks, "unlimited" places any named block without using items
 	public String materials = "inventory";
 	// a beat after each break, place, open, close, or transfer so a watcher can follow along, 0 for training runs
@@ -120,6 +124,7 @@ public final class Config {
 		this.streamHz = Math.clamp(this.streamHz, 1, 20);
 		this.radius = Math.clamp(this.radius, 4, 48);
 		this.maxSteps = Math.clamp(this.maxSteps, 10, 100000);
+		this.sensorRange = Math.clamp(this.sensorRange, 0.5F, 16.0F);
 		if (this.streams == null) {
 			this.streams = new ArrayList<>(List.of("rgb", "depth", "mask"));
 		}

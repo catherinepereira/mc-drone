@@ -5,11 +5,13 @@ import com.catherinepereira.mcdrone.entity.BatteryConfig;
 import com.catherinepereira.mcdrone.entity.DroneItem;
 import com.catherinepereira.mcdrone.entity.DroneTier;
 import net.fabricmc.fabric.api.creativetab.v1.CreativeModeTabEvents;
+import net.fabricmc.fabric.api.object.builder.v1.entity.FabricDefaultAttributeRegistry;
 import net.minecraft.core.Registry;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.MobCategory;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.CreativeModeTabs;
@@ -35,6 +37,10 @@ public final class ModContent {
 	public static final Item COPPER_DRONE = registerItem("copper_drone", p -> new DroneItem(p, DroneTier.COPPER), new Item.Properties().stacksTo(1));
 	public static final Item IRON_DRONE = registerItem("iron_drone", p -> new DroneItem(p, DroneTier.IRON), new Item.Properties().stacksTo(1));
 	public static final Item DIAMOND_DRONE = registerItem("diamond_drone", p -> new DroneItem(p, DroneTier.DIAMOND), new Item.Properties().stacksTo(1));
+	// upgraded from a diamond drone at a smithing table, and like netherite gear the item survives fire and lava
+	public static final Item NETHERITE_DRONE = registerItem(
+		"netherite_drone", p -> new DroneItem(p, DroneTier.NETHERITE), new Item.Properties().stacksTo(1).fireResistant()
+	);
 	// lists the player's drones and selects regions for their jobs, see TabletInput
 	public static final Item TABLET = registerItem("tablet", Item::new, new Item.Properties().stacksTo(1));
 
@@ -60,16 +66,19 @@ public final class ModContent {
 			case COPPER -> COPPER_DRONE;
 			case IRON -> IRON_DRONE;
 			case DIAMOND -> DIAMOND_DRONE;
+			case NETHERITE -> NETHERITE_DRONE;
 		};
 	}
 
 	public static void register() {
+		FabricDefaultAttributeRegistry.register(DRONE, LivingEntity.createLivingAttributes());
 		TabletInput.register();
 		BatteryConfig.load();
 		CreativeModeTabEvents.modifyOutputEvent(CreativeModeTabs.TOOLS_AND_UTILITIES).register(output -> {
 			output.accept(COPPER_DRONE);
 			output.accept(IRON_DRONE);
 			output.accept(DIAMOND_DRONE);
+			output.accept(NETHERITE_DRONE);
 			output.accept(TABLET);
 			output.accept(CHARGING_STATION_ITEM);
 			output.accept(MARKER_ITEM);

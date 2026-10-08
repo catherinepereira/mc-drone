@@ -241,6 +241,7 @@ class View:
     inside: np.ndarray  # (N, 3) int, the block each hit landed in
     interior: np.ndarray  # (N,) bool, hits at least 0.15 from both edges of the face they landed on
     outside: np.ndarray  # (N, 3) int, the air block each ray crossed just before its hit
+    points: np.ndarray  # (N, 3) float, where each ray hit
 
 
 def backproject(state: dict, depth: np.ndarray, depth_max: float, valid: np.ndarray | None = None, stride: int = PIXEL_STRIDE) -> View:
@@ -276,4 +277,30 @@ def backproject(state: dict, depth: np.ndarray, depth_max: float, valid: np.ndar
     outside = np.floor(points - unit * 0.15).astype(np.int64)[hit]
     local = points[hit] - inside
     edge_dist = np.sort(np.minimum(np.abs(local), np.abs(1 - local)), axis=1)
-    return View(eye, rows, cols, hit, inside, edge_dist[:, 1] > 0.15, outside)
+    return View(eye, rows, cols, hit, inside, edge_dist[:, 1] > 0.15, outside, points[hit])
+
+
+def project(state: dict, point, shape: tuple[int, int]) -> tuple[int, int, float] | None:
+    """The pixel row and column a world point lands on and its depth along the camera axis, None when out of view"""
+    cam = state["camera"]
+    pos = state["pos"]
+    eye = np.array([pos[0], pos[1] + cam["eyeHeight"], pos[2]])
+    yaw = math.radians(state["yaw"])
+    pitch = math.radians(state.get("pitch", 0.0))
+    forward = np.array([-math.sin(yaw) * math.cos(pitch), -math.sin(pitch), math.cos(yaw) * math.cos(pitch)])
+    right = np.array([-math.cos(yaw), 0.0, -math.sin(yaw)])
+    up = np.cross(right, forward)
+    h, w = shape
+    out_aspect = w / h
+    tan_y = math.tan(math.radians(cam["fov"]) / 2)
+    tan_x = tan_y * min(cam["windowAspect"], out_aspect)
+    tan_ye = tan_x / out_aspect
+    d = np.asarray(point, dtype=np.float64) - eye
+    z = float(d @ forward)
+    if z <= 0.1:
+        return None
+    nx = float(d @ right) / z / tan_x
+    ny = float(d @ up) / z / tan_ye
+    if abs(nx) >= 1 or abs(ny) >= 1:
+        return None
+    return int((1 - ny) / 2 * h), int((nx + 1) / 2 * w), z

@@ -4,9 +4,10 @@ import numpy as np
 import torch
 from PIL import Image
 
-from drone_model.train.demos import load_demos
 from drone_model.experts.navigate import expert_action
-from drone_model.policies.cnn import ACTION_DIM, DronePolicy, to_image
+from drone_model.framework.collect import from_recordings
+from drone_model.framework.data import load_steps
+from drone_model.policies.navigate import ACTION_DIM, DronePolicy, NavigateSpec, to_image
 
 
 def test_policy_output_shape_and_range():
@@ -26,7 +27,7 @@ def test_expert_turns_toward_marker_before_moving():
     assert facing[0] > 0.9 and abs(facing[3]) < 0.25
 
 
-def test_load_demos_uses_expert_labels(tmp_path):
+def test_recordings_become_rows_labeled_by_the_expert(tmp_path):
     ep = tmp_path / "navigate_to" / "e1"
     for sub in ("rgb", "depth"):
         (ep / sub).mkdir(parents=True)
@@ -38,10 +39,14 @@ def test_load_demos_uses_expert_labels(tmp_path):
         rows.append({"step": n, "state": {"vel": [0, 0, 0], "yaw": 0, "pitch": 0}, "action": None if n == 2 else {"move": [0, 0, 0], "look": [0, 0]}, "reward": 0, "done": n == 2})
     (ep / "steps.jsonl").write_text("\n".join(json.dumps(r) for r in rows))
     (ep / "expert.jsonl").write_text("[1, 0, 0, 0.5, 0]\n[0, 0, 1, 0, 0]\n")
-    demos = load_demos(tmp_path)
-    assert len(demos) == 2
-    assert demos.action[0].tolist() == [1, 0, 0, 0.5, 0]
-    assert demos.depth[0, 0, 0] == 127
+    (tmp_path / "navigate_to" / "mask_ids.json").write_text(json.dumps({"blocks": [], "entities": [], "entityBase": 32768}))
+    out = tmp_path / "rows"
+    out.mkdir()
+    from_recordings(NavigateSpec(), "navigate_to", out, every_outcome=True, data=tmp_path)
+    rows = load_steps(sorted(out.glob("*.npz")), stride=1)
+    assert len(rows["move"]) == 2
+    assert rows["move"][0].tolist() == [1, 0, 0, 0.5, 0]
+    assert rows["depth"][0, 0, 0] == 127
 
 
 def test_expert_plans_around_a_pillar():
@@ -58,7 +63,7 @@ def test_expert_plans_around_a_pillar():
 
 
 def test_gae_stops_at_episode_boundaries():
-    from drone_model.train.ppo import gae
+    from drone_model.framework.ppo import gae
 
     rewards = np.array([1.0, 1.0, 1.0], np.float32)
     values = np.zeros(3, np.float32)

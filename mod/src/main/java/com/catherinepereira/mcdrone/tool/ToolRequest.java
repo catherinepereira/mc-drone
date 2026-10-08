@@ -24,7 +24,8 @@ public record ToolRequest(DroneTool tool, int slot, int transfer, int fromSlot, 
 
 	/** Same request with the one-shot parts removed, for the 2nd and later ticks of a multi-tick step */
 	public ToolRequest continued() {
-		return new ToolRequest(this.tool == DroneTool.BREAK ? DroneTool.BREAK : DroneTool.NONE, this.slot, NO_TRANSFER, 0, -1, 0, "", this.unlimited);
+		DroneTool held = this.tool == DroneTool.BREAK || this.tool == DroneTool.ATTACK ? this.tool : DroneTool.NONE;
+		return new ToolRequest(held, this.slot, NO_TRANSFER, 0, -1, 0, "", this.unlimited);
 	}
 
 	public ToolRequest withMaterials(boolean unlimited) {

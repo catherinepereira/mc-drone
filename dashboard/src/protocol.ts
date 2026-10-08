@@ -2,7 +2,14 @@
 
 export type Vec3 = [number, number, number];
 
-export const TOOLS = ["none", "break", "place", "open", "close"] as const;
+export const TOOLS = [
+  "none",
+  "break",
+  "place",
+  "open",
+  "close",
+  "attack",
+] as const;
 export type Tool = (typeof TOOLS)[number];
 
 export interface Transfer {
@@ -77,6 +84,8 @@ export interface EpisodeInfo {
   droneCollisions?: number;
   outOfBounds?: boolean;
   metrics?: number[];
+  // patrol cells flown this round and rounds flown, for patrol and guard jobs and arenas
+  patrol?: { visited: number; cells: number; round: number; rounds: number };
 }
 
 export interface Status {
@@ -106,7 +115,7 @@ export interface QueuedJob {
 export interface DroneInfo {
   id: number;
   name: string;
-  tier: "copper" | "iron" | "diamond";
+  tier: "copper" | "iron" | "diamond" | "netherite";
   active: boolean;
   pos: Vec3;
   charge: number;

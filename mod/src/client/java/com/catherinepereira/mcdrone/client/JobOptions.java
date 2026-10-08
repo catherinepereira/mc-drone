@@ -17,14 +17,17 @@ public final class JobOptions {
 	private JobOptions() {
 	}
 
-	/** The schematic for a build job, the blocks for a mine job (a list, or names separated by commas), the crop for a harvest job */
+	/**
+	 * The schematic for a build job, the blocks for a mine job (a list, or names separated by commas), the crop for a
+	 * harvest job, the rounds for a patrol or guard job
+	 */
 	public static String subject(JsonObject options) {
 		if (options.has("blocks") && options.get("blocks").isJsonArray()) {
 			List<String> names = new ArrayList<>();
 			options.getAsJsonArray("blocks").forEach(e -> names.add(e.getAsString()));
 			return String.join(",", names);
 		}
-		for (String key : new String[] {"schematic", "blocks", "block", "crop"}) {
+		for (String key : new String[] {"schematic", "blocks", "block", "crop", "rounds"}) {
 			if (options.has(key)) {
 				return options.get(key).getAsString();
 			}
@@ -37,8 +40,8 @@ public final class JobOptions {
 	 * Throws IllegalArgumentException saying why the job can't start
 	 */
 	public static int[] region(TaskKind kind, JsonObject options, String subject, Selection selection, Regions regions) {
-		if (kind == TaskKind.RETURN_HOME) {
-			// the server knows the drone's station
+		if (kind == TaskKind.RETURN_HOME || kind == TaskKind.FOLLOW_PLAYER) {
+			// the server knows the drone's station, and who it follows
 			return new int[9];
 		}
 		Selection sel = selection.copy();
@@ -69,6 +72,28 @@ public final class JobOptions {
 			sel.dest = BlockPos.min(box[0], box[1]);
 		}
 		int[] gather = gather(kind, options.get("gather"), regions);
+
+		if (kind == TaskKind.FLY_TO) {
+			if (sel.dest == null) {
+				throw new IllegalArgumentException("set the point to fly to with the paste point, sneak and right click, or give dest");
+			}
+			return new int[] {0, 0, 0, 0, 0, 0, sel.dest.getX(), sel.dest.getY(), sel.dest.getZ()};
+		}
+		if (kind == TaskKind.SEEK_BLOCK) {
+			if (subject.isEmpty()) {
+				throw new IllegalArgumentException("seek_block needs a block, such as bricks");
+			}
+			if (sel.size() == null) {
+				throw new IllegalArgumentException("select the region to search, or name a saved one");
+			}
+			return Arrays.copyOf(ints(sel.cornerA, sel.cornerB), 9);
+		}
+		if (kind == TaskKind.PATROL_REGION || kind == TaskKind.GUARD_REGION) {
+			if (sel.size() == null) {
+				throw new IllegalArgumentException("select the region to patrol, or name a saved one");
+			}
+			return Arrays.copyOf(ints(sel.cornerA, sel.cornerB), 9);
+		}
 
 		if (kind == TaskKind.MINE_REGION || kind == TaskKind.HARVEST_REGION) {
 			if (subject.isEmpty()) {
@@ -106,6 +131,11 @@ public final class JobOptions {
 			case MINE_REGION -> "mine " + what + " in " + region;
 			case HARVEST_REGION -> "harvest " + what + " in " + region;
 			case RETURN_HOME -> "return home";
+			case PATROL_REGION -> "patrol " + region + rounds(subject);
+			case GUARD_REGION -> "guard " + region + rounds(subject);
+			case FLY_TO -> "fly to " + dest;
+			case SEEK_BLOCK -> "find " + what + " in " + region;
+			case FOLLOW_PLAYER -> "follow me";
 			default -> kind.id;
 		};
 	}
@@ -117,10 +147,12 @@ public final class JobOptions {
 			case DIG_BLOCK, PLACE_BLOCK -> 400;
 			case CHEST_TRANSFER -> 600;
 			case MINE_AND_DELIVER, REPLICATE_BUILD -> 900;
-			case HARVEST_CROPS -> 1500;
+			case HARVEST_CROPS, PATROL_AREA, FIND_BLOCK, FOLLOW_MOB -> 1500;
+			case GOTO_POINT -> 600;
+			case HUNT_MOBS -> 3000;
 			case COPY_BUILD, SCHEMATIC_BUILD, MINE_DEPOSIT, GATHER_BUILD -> 20000;
 			// a job runs until it's done or stopped, sized for the largest 16x16x16 builds
-			case COPY_REGION, BUILD_SCHEMATIC, MINE_REGION, HARVEST_REGION, RETURN_HOME -> 100000;
+			case COPY_REGION, BUILD_SCHEMATIC, MINE_REGION, HARVEST_REGION, RETURN_HOME, PATROL_REGION, GUARD_REGION, FLY_TO, SEEK_BLOCK, FOLLOW_PLAYER -> 100000;
 		};
 	}
 
@@ -142,6 +174,11 @@ public final class JobOptions {
 			throw new IllegalArgumentException("gather needs a saved region's name or 6 numbers, x0 y0 z0 x1 y1 z1");
 		}
 		return ints(box[0], box[1]);
+	}
+
+	private static String rounds(String subject) {
+		String n = subject.isBlank() ? "1" : subject.trim();
+		return ", " + n + (n.equals("1") ? " round" : " rounds");
 	}
 
 	private static BlockPos[] savedBox(Regions regions, String name) {

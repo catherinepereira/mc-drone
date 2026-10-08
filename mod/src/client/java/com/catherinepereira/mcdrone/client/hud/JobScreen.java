@@ -42,7 +42,12 @@ public final class JobScreen extends Screen {
 		COPY("Copy a region", "copy_region"),
 		BUILD("Build a schematic", "build_schematic"),
 		MINE("Mine blocks in a region", "mine_region"),
-		HARVEST("Harvest and replant crops", "harvest_region");
+		HARVEST("Harvest and replant crops", "harvest_region"),
+		PATROL("Patrol a region", "patrol_region"),
+		GUARD("Guard a region from hostile mobs", "guard_region"),
+		FLY("Fly to the paste point", "fly_to"),
+		SEEK("Find a block in a region", "seek_block"),
+		FOLLOW("Follow me", "follow_player");
 
 		final String label;
 		final String task;
@@ -101,11 +106,14 @@ public final class JobScreen extends Screen {
 		List<String> withSelection = new ArrayList<>(saved);
 		withSelection.addFirst(SELECTION);
 
-		if (this.action != Action.BUILD) {
+		if (this.action != Action.BUILD && this.action != Action.FLY && this.action != Action.FOLLOW) {
 			this.region = withSelection.contains(this.region) ? this.region : SELECTION;
 			String label = switch (this.action) {
 				case COPY -> "Copy from";
 				case MINE -> "Mine in";
+				case PATROL -> "Patrol";
+				case GUARD -> "Guard";
+				case SEEK -> "Search";
 				default -> "Farm";
 			};
 			this.addRenderableWidget(
@@ -116,14 +124,17 @@ public final class JobScreen extends Screen {
 			y = this.nextRow(y);
 		}
 
-		if (this.action == Action.COPY || this.action == Action.BUILD) {
+		if (this.action == Action.COPY || this.action == Action.BUILD || this.action == Action.FLY) {
 			this.dest = withSelection.contains(this.dest) ? this.dest : SELECTION;
 			this.addRenderableWidget(
 				CycleButton.<String>builder(this::destLabel, this.dest)
 					.withValues(withSelection)
-					.create(this.left, y, W, 20, Component.literal("Paste at"), (button, value) -> this.dest = value)
+					.create(this.left, y, W, 20, Component.literal(this.action == Action.FLY ? "Fly to" : "Paste at"), (button, value) -> this.dest = value)
 			);
 			y = this.nextRow(y);
+		}
+
+		if (this.action == Action.COPY || this.action == Action.BUILD) {
 			List<String> gathers = new ArrayList<>(saved);
 			gathers.addFirst(NONE);
 			this.gather = gathers.contains(this.gather) ? this.gather : NONE;
@@ -135,12 +146,14 @@ public final class JobScreen extends Screen {
 			y = this.nextRow(y);
 		}
 
-		if (this.action != Action.COPY) {
+		if (this.action != Action.COPY && this.action != Action.FLY && this.action != Action.FOLLOW) {
 			EditBox box = new EditBox(this.font, this.left, y, W, 20, Component.literal("subject"));
 			box.setMaxLength(128);
 			box.setHint(Component.literal(switch (this.action) {
 				case BUILD -> "schematic file, such as house.schem";
 				case HARVEST -> "crop, such as wheat";
+				case PATROL, GUARD -> "rounds, such as 3 (blank for 1)";
+				case SEEK -> "block, such as bricks";
 				default -> "blocks, such as coal_ore, iron_ore";
 			}));
 			box.setValue(this.subject);
@@ -202,24 +215,28 @@ public final class JobScreen extends Screen {
 	private void start(boolean queue) {
 		JsonObject options = new JsonObject();
 		options.addProperty("task", this.action.task);
-		if (this.action != Action.BUILD && !this.region.equals(SELECTION)) {
+		if (this.action != Action.BUILD && this.action != Action.FLY && this.action != Action.FOLLOW && !this.region.equals(SELECTION)) {
 			options.addProperty("region", this.region);
 		}
+		if ((this.action == Action.COPY || this.action == Action.BUILD || this.action == Action.FLY) && !this.dest.equals(SELECTION)) {
+			options.addProperty("dest", this.dest);
+		}
 		if (this.action == Action.COPY || this.action == Action.BUILD) {
-			if (!this.dest.equals(SELECTION)) {
-				options.addProperty("dest", this.dest);
-			}
 			if (!this.gather.equals(NONE)) {
 				options.addProperty("gather", this.gather);
 			}
 		}
 		if (this.action == Action.BUILD) {
 			options.addProperty("schematic", this.subject.endsWith(".schem") ? this.subject.trim() : this.subject.trim() + ".schem");
-		} else if (this.action != Action.COPY) {
+		} else if (this.action != Action.COPY && this.action != Action.FLY && this.action != Action.FOLLOW) {
 			String name = this.subject.trim();
 			if (this.action == Action.MINE) {
 				// names without a namespace are minecraft's, the server reads the list
 				options.addProperty("blocks", name);
+			} else if (this.action == Action.PATROL || this.action == Action.GUARD) {
+				options.addProperty("rounds", name);
+			} else if (this.action == Action.SEEK) {
+				options.addProperty("block", name);
 			} else {
 				options.addProperty("crop", name.contains(":") ? name : "minecraft:" + name);
 			}
@@ -327,6 +344,11 @@ public final class JobScreen extends Screen {
 			case BUILD -> this.gather.equals(NONE) ? "Uses the drone's own blocks" : "Mines its blocks first, then builds";
 			case MINE -> "Mines every block of those kinds, only inside the region";
 			case HARVEST -> "Ripe crops come out, and every empty farmland cell gets replanted";
+			case PATROL -> "Flies over every part of the region, round after round";
+			case GUARD -> "Patrols the region and kills the hostile mobs it finds there";
+			case FLY -> "Flies to the point, around whatever is in the way";
+			case SEEK -> "Searches the region with its camera and flies to the nearest one";
+			case FOLLOW -> "Keeps 2 to 5 blocks from you until you stop it";
 		};
 	}
 }

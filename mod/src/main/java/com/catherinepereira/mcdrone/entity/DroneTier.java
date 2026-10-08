@@ -1,26 +1,42 @@
 package com.catherinepereira.mcdrone.entity;
 
 import java.util.List;
+import net.minecraft.core.component.DataComponents;
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.item.component.ItemAttributeModifiers;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 import org.jspecify.annotations.Nullable;
 
-/** What a drone is built from. The tier's pickaxe sets how fast it breaks blocks and which ones drop, like a player's */
+/**
+ * What a drone is built from. The tier's pickaxe sets how fast it breaks blocks and which ones drop, like a player's,
+ * and its sword how hard it hits
+ */
 public enum DroneTier {
-	COPPER("copper", Items.COPPER_PICKAXE),
-	IRON("iron", Items.IRON_PICKAXE),
-	DIAMOND("diamond", Items.DIAMOND_PICKAXE);
+	COPPER("copper", Items.COPPER_PICKAXE, Items.COPPER_SWORD),
+	IRON("iron", Items.IRON_PICKAXE, Items.IRON_SWORD),
+	DIAMOND("diamond", Items.DIAMOND_PICKAXE, Items.DIAMOND_SWORD),
+	NETHERITE("netherite", Items.NETHERITE_PICKAXE, Items.NETHERITE_SWORD);
 
 	public final String id;
 	public final Item pickaxe;
+	public final Item sword;
 
-	DroneTier(String id, Item pickaxe) {
+	DroneTier(String id, Item pickaxe, Item sword) {
 		this.id = id;
 		this.pickaxe = pickaxe;
+		this.sword = sword;
+	}
+
+	/** A hit's damage, what the tier's sword deals in a player's hand */
+	public float attackDamage() {
+		ItemAttributeModifiers modifiers = new ItemStack(this.sword).getOrDefault(DataComponents.ATTRIBUTE_MODIFIERS, ItemAttributeModifiers.EMPTY);
+		return (float) modifiers.compute(Attributes.ATTACK_DAMAGE, 1.0, EquipmentSlot.MAINHAND);
 	}
 
 	/** Whether breaking state drops anything, the game's own tool tags decide */

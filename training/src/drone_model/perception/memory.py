@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .worldmap import backproject
-from .reader import CLASSES, OTHER, SKY
+from .reader import CLASSES, HOSTILE, OTHER, PASSIVE, SKY
 
 AIR = "minecraft:air"
 # a cell needs this many votes before the drone believes anything is there
@@ -71,7 +71,8 @@ class VoxelMemory:
     def observe(self, state: dict, depth: np.ndarray, classes: np.ndarray, ripe: np.ndarray, depth_max: float = 64.0) -> list[Change]:
         """Adds one frame of reader output, returns the cells whose belief changed"""
         self.step += 1
-        view = backproject(state, depth, depth_max, valid=classes != SKY)
+        # mobs move, they aren't blocks
+        view = backproject(state, depth, depth_max, valid=(classes != SKY) & (classes != HOSTILE) & (classes != PASSIVE))
         cls = classes[np.ix_(view.rows, view.cols)][view.hit]
         rp = ripe[np.ix_(view.rows, view.cols)][view.hit]
         dist = depth[np.ix_(view.rows, view.cols)][view.hit]

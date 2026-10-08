@@ -13,8 +13,10 @@ from ..perception.reader import mask_lut
 from ..perception.worldmap import WorldMap, perceivable
 from .navigate import waypoint
 
-TOOLS = ("none", "break", "place", "open", "close")
+TOOLS = ("none", "break", "place", "open", "close", "attack")
 REACH = 4.4
+# the attack beam's reach, a little inside the mod's DroneTools.BEAM_RANGE
+BEAM_RANGE = 9.5
 AIM_TOLERANCE = 3.0
 TURN_GAIN = 1.0 / 15.0
 SPIN_TICKS = 24
@@ -35,6 +37,8 @@ TOP_LEAN = 0.8
 VIEW_APPROACH = 1.5
 # steps spent on one block before giving up on it, mining ore takes about 25
 WORK_LIMIT = 150
+# a front range reading this close while stopped is a block in the way
+BUMP_RANGE = 0.15
 # frames a survey holds its aim on each view, and steps before it moves on from a view it can't reach
 SURVEY_DWELL = 4
 SURVEY_LIMIT = 90
@@ -164,6 +168,13 @@ class HonestExpert:
         self.stalled_climbs = self.stalled_climbs + 1 if stalled else 0
         if self.stalled_climbs >= 3:
             self.map.bump_ceiling(pos[0], pos[2], pos[1] + 0.4)
+        # stopped with the front range sensor touching a block the camera never mapped, such as a low dip in a cave roof,
+        # the column ahead counts as blocked at this height
+        front = (state.get("range") or {}).get("front")
+        if state.get("collided") and front is not None and front < BUMP_RANGE:
+            yaw = math.radians(state["yaw"])
+            ahead = (math.floor(pos[0] - math.sin(yaw) * 0.8), math.floor(pos[2] + math.cos(yaw) * 0.8))
+            self.map.heights[ahead] = max(self.map.heights.get(ahead, -math.inf), pos[1] + 1.0)
         for event in state.get("events", []):
             if event.get("type") == "break":
                 self.map.forget(tuple(event["pos"]))

@@ -31,7 +31,10 @@ BOX_KEYS = ("source", "dest", "region", "gather")
 
 
 def job_volume(job: dict) -> int:
-    """Cells in the job's boxes, what its cost scales with"""
+    """Cells in the job's boxes, what its cost scales with. A patrol's is its region's footprint for each round flown"""
+    if job.get("kind") == "patrol":
+        b = job["region"]
+        return (abs(b[3] - b[0]) + 1) * (abs(b[5] - b[2]) + 1) * max(1, job["rounds"])
     total = 0
     for key in BOX_KEYS:
         b = job.get(key)

@@ -4,7 +4,7 @@ import numpy as np
 
 from drone_model.perception.worldmap import DRONE_FRAMES, WorldMap
 
-MASK_IDS = {"blocks": ["minecraft:stone"], "entities": ["mcdrone:drone"], "entityBase": 32768}
+MASK_IDS = {"blocks": ["minecraft:stone"], "entities": ["mcdrone:drone", "minecraft:zombie", "minecraft:cow"], "categories": ["misc", "monster", "creature"], "entityBase": 32768}
 
 
 def look(map_: WorldMap, pitch: float, depth: float, eye_y: float = 3.0) -> None:
@@ -58,3 +58,41 @@ def test_a_seen_drone_blocks_its_column_for_a_while():
     for _ in range(DRONE_FRAMES):
         map_.update(state, np.full((16, 16), 64.0, np.float32), np.zeros((16, 16), np.int64), 64.0)
     assert not map_.blocked(ahead)
+
+
+def test_hostile_pixels_become_one_tracked_mob_until_the_camera_sees_past_it():
+    from drone_model.perception.mobs import GONE_LOOKS, MobTracker, hostile_ids
+
+    tracker = MobTracker(hostile_ids(MASK_IDS))
+    state = {"pos": [0.5, 3.0, 0.5], "yaw": 0.0, "pitch": 0.0, "camera": {"eyeHeight": 0.0, "fov": 70.0, "windowAspect": 1.0}}
+    depth = np.full((16, 16), 64.0, np.float32)
+    mask = np.zeros((16, 16), np.int64)
+    # a zombie straight ahead, a cow beside it
+    depth[6:10, 6:10] = 4.0
+    mask[6:10, 6:10] = 32769
+    depth[6:10, 12:16] = 4.0
+    mask[6:10, 12:16] = 32770
+    tracker.update(state, depth, mask, 64.0)
+    assert len(tracker.mobs) == 1
+    assert np.allclose(tracker.mobs[0].pos, [0.5, 3.0, 4.5], atol=0.5)
+    for _ in range(GONE_LOOKS):
+        tracker.update(state, np.full((16, 16), 64.0, np.float32), np.zeros((16, 16), np.int64), 64.0)
+    assert not tracker.mobs
+
+
+def test_project_lands_on_the_pixel_backproject_came_from():
+    from drone_model.perception.worldmap import backproject, project
+
+    state = {"pos": [2.0, 5.0, -1.0], "yaw": 30.0, "pitch": 20.0, "camera": {"eyeHeight": 0.2, "fov": 70.0, "windowAspect": 1.6}}
+    depth = np.full((24, 32), 6.0, np.float32)
+    view = backproject(state, depth, 64.0, stride=1)
+    row, col, z = project(state, view.points[5 * 32 + 7], depth.shape)
+    assert (row, col) == (5, 7) and abs(z - 6.0) < 1e-6
+
+
+def test_reader_labels_monsters_hostile_and_other_mobs_passive():
+    from drone_model.perception.reader import HOSTILE, PASSIVE, SKY, entity_table
+
+    names = ["mcdrone:drone", "minecraft:zombie", "minecraft:cow", "minecraft:item"]
+    table = entity_table(names, {"minecraft:zombie": "monster", "minecraft:cow": "creature", "minecraft:item": "misc"})
+    assert list(table) == [SKY, HOSTILE, PASSIVE, SKY]

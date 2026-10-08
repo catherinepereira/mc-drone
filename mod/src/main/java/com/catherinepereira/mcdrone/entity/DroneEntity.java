@@ -21,6 +21,10 @@ import net.minecraft.world.SimpleMenuProvider;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
+import net.minecraft.util.Mth;
+import net.minecraft.world.entity.HumanoidArm;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.projectile.ItemSupplier;
 import net.minecraft.world.inventory.ChestMenu;
@@ -35,9 +39,9 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * Moved only by its owner's client, which sends poses to the server.
- * The server never simulates it
+ * The server never simulates it. It's a living entity so a mob it attacks can fight back, and only mobs hurt it
  */
-public class DroneEntity extends Entity implements ItemSupplier {
+public class DroneEntity extends LivingEntity implements ItemSupplier {
 	private static final EntityDataAccessor<String> OWNER = SynchedEntityData.defineId(DroneEntity.class, EntityDataSerializers.STRING);
 	private static final EntityDataAccessor<Integer> TIER = SynchedEntityData.defineId(DroneEntity.class, EntityDataSerializers.INT);
 	// battery charge from 0 to 1, see BatteryConfig
@@ -46,6 +50,13 @@ public class DroneEntity extends Entity implements ItemSupplier {
 	private static final EntityDataAccessor<Optional<BlockPos>> HOME = SynchedEntityData.defineId(DroneEntity.class, EntityDataSerializers.OPTIONAL_BLOCK_POS);
 	// jobs waiting to run, a JSON array of job options with a "label", see ClientRuntime.queueJob
 	private static final EntityDataAccessor<String> QUEUE = SynchedEntityData.defineId(DroneEntity.class, EntityDataSerializers.STRING);
+	// the mob the attack beam is locked on, -1 for none, and the drone ticks it has charged, see DroneTools
+	private static final EntityDataAccessor<Integer> BEAM_TARGET = SynchedEntityData.defineId(DroneEntity.class, EntityDataSerializers.INT);
+	private static final EntityDataAccessor<Integer> BEAM_CHARGE = SynchedEntityData.defineId(DroneEntity.class, EntityDataSerializers.INT);
+	// a training arena's drone can't die, damage that would kill it wrecks it instead, which ends its episode
+	private static final EntityDataAccessor<Boolean> WRECKED = SynchedEntityData.defineId(DroneEntity.class, EntityDataSerializers.BOOLEAN);
+	// health a docked drone gets back each tick, empty to full in about 20 seconds
+	private static final float REPAIR_PER_TICK = 0.05F;
 	public static final int MAX_QUEUE = 16;
 	// ticks the motors stay on after the drone last moved or broke a block, idle drones don't draw power
 	private static final int POWERED_TICKS = 100;
@@ -87,11 +98,15 @@ public class DroneEntity extends Entity implements ItemSupplier {
 
 	@Override
 	protected void defineSynchedData(SynchedEntityData.Builder builder) {
+		super.defineSynchedData(builder);
 		builder.define(OWNER, "");
 		builder.define(TIER, DroneTier.COPPER.ordinal());
 		builder.define(CHARGE, 1.0F);
 		builder.define(HOME, Optional.empty());
 		builder.define(QUEUE, "[]");
+		builder.define(BEAM_TARGET, -1);
+		builder.define(BEAM_CHARGE, 0);
+		builder.define(WRECKED, false);
 	}
 
 	public void setOwner(Player owner) {
@@ -137,6 +152,20 @@ public class DroneEntity extends Entity implements ItemSupplier {
 		return this.entityData.get(CHARGE);
 	}
 
+	/** The entity id the attack beam is locked on, -1 without a beam */
+	public int beamTarget() {
+		return this.entityData.get(BEAM_TARGET);
+	}
+
+	public int beamCharge() {
+		return this.entityData.get(BEAM_CHARGE);
+	}
+
+	public void setBeam(int target, int charge) {
+		this.entityData.set(BEAM_TARGET, target);
+		this.entityData.set(BEAM_CHARGE, charge);
+	}
+
 	/** Out of charge with the battery on, the drone can't fly or use tools */
 	public boolean flat() {
 		return BatteryConfig.get().enabled && !this.trainingArena && this.charge() <= 0.0F;
@@ -152,6 +181,16 @@ public class DroneEntity extends Entity implements ItemSupplier {
 
 	public void recharge() {
 		this.entityData.set(CHARGE, 1.0F);
+	}
+
+	public boolean wrecked() {
+		return this.entityData.get(WRECKED);
+	}
+
+	/** Full health and no longer wrecked, how a training arena hands out its drone */
+	public void repair() {
+		this.setHealth(this.getMaxHealth());
+		this.entityData.set(WRECKED, false);
 	}
 
 	/** Spends charge for a block broken */
@@ -244,15 +283,69 @@ public class DroneEntity extends Entity implements ItemSupplier {
 		}
 		if (this.docked()) {
 			this.entityData.set(CHARGE, (float) Math.min(1.0, this.charge() + battery.chargePerTick()));
+			this.heal(REPAIR_PER_TICK);
 		} else if (this.poweredFor > 0) {
 			this.poweredFor--;
 			this.spend(moved ? battery.flightPerTick() : battery.flightPerTick() * battery.hoverShare);
 		}
 	}
 
+	/**
+	 * Only mobs hurt a drone, their hits and their arrows. Players pick it up instead, and a drone takes no fall,
+	 * fire, or drowning damage. A training arena's drone is wrecked where it would die
+	 */
 	@Override
 	public boolean hurtServer(ServerLevel level, DamageSource source, float damage) {
+		if (!(source.getEntity() instanceof Mob) || this.wrecked()) {
+			return false;
+		}
+		if (this.trainingArena && damage >= this.getHealth()) {
+			this.entityData.set(WRECKED, true);
+			damage = this.getHealth() - 1.0F;
+		}
+		return super.hurtServer(level, source, damage);
+	}
+
+	@Override
+	public void die(DamageSource source) {
+		super.die(source);
+		// shot down, its cargo and the drone itself drop where it fell
+		if (this.level() instanceof ServerLevel level) {
+			Containers.dropContents(level, this, this.inventory);
+			this.spawnAtLocation(level, new ItemStack(ModContent.droneItem(this.tier())));
+		}
+	}
+
+	@Override
+	public boolean canBreatheUnderwater() {
+		return true;
+	}
+
+	@Override
+	public boolean isPushable() {
 		return false;
+	}
+
+	@Override
+	public HumanoidArm getMainArm() {
+		return HumanoidArm.RIGHT;
+	}
+
+	// a living entity's camera and look follow its head, the drone's camera turns with its body
+	@Override
+	public float getViewYRot(float partialTick) {
+		return partialTick == 1.0F ? this.getYRot() : Mth.rotLerp(partialTick, this.yRotO, this.getYRot());
+	}
+
+	@Override
+	public float getYHeadRot() {
+		return this.getYRot();
+	}
+
+	// flight never steps up onto a block the way walking mobs do
+	@Override
+	public float maxUpStep() {
+		return 0.0F;
 	}
 
 	@Override
@@ -303,6 +396,7 @@ public class DroneEntity extends Entity implements ItemSupplier {
 
 	@Override
 	protected void readAdditionalSaveData(ValueInput input) {
+		super.readAdditionalSaveData(input);
 		this.entityData.set(OWNER, input.getStringOr("owner", ""));
 		this.ownerName = input.getStringOr("ownerName", "");
 		this.rename(input.getStringOr("name", DEFAULT_NAME));
@@ -316,6 +410,7 @@ public class DroneEntity extends Entity implements ItemSupplier {
 
 	@Override
 	protected void addAdditionalSaveData(ValueOutput output) {
+		super.addAdditionalSaveData(output);
 		output.putString("owner", this.entityData.get(OWNER));
 		output.putString("ownerName", this.ownerName);
 		output.putString("name", this.name);

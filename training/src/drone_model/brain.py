@@ -33,16 +33,18 @@ CHARGE_TICKS = 50
 # a drone's worker lets it go after this long without a new job
 IDLE_SECONDS = 20.0
 JOB_TASKS = (
-    "copy_region", "build_schematic", "mine_region", "harvest_region", "return_home",
-    "replicate_build", "harvest_crops", "copy_build", "schematic_build", "mine_deposit", "gather_build",
+    "copy_region", "build_schematic", "mine_region", "harvest_region", "return_home", "patrol_region", "guard_region", "fly_to", "seek_block",
+    "follow_player", "replicate_build", "harvest_crops", "copy_build", "schematic_build", "mine_deposit", "gather_build", "patrol_area",
+    "hunt_mobs", "goto_point", "find_block", "follow_mob",
 )
 
 
-def job_focus(job: dict) -> list[int]:
-    """The smallest box around every box the job names, what the dashboard's memory panel shows"""
+def job_focus(job: dict) -> list[int] | None:
+    """The smallest box around every box the job names, what the dashboard's memory panel shows, None for a follow"""
     boxes = [job[k] for k in ("source", "dest", "region") if k in job]
-    if "station" in job:
-        boxes.append(job["station"] * 2)
+    boxes += [job[k] * 2 for k in ("station", "point") if k in job]
+    if not boxes:
+        return None
     return [min(b[i] for b in boxes) for i in range(3)] + [max(b[i] for b in boxes) for i in range(3, 6)]
 
 

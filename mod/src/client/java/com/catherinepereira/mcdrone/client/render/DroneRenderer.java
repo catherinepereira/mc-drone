@@ -3,6 +3,7 @@ package com.catherinepereira.mcdrone.client.render;
 import com.catherinepereira.mcdrone.McDrone;
 import com.catherinepereira.mcdrone.entity.DroneEntity;
 import com.catherinepereira.mcdrone.entity.DroneTier;
+import com.catherinepereira.mcdrone.tool.DroneTools;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.math.Axis;
 import net.minecraft.client.model.EntityModel;
@@ -14,6 +15,8 @@ import net.minecraft.client.renderer.state.level.CameraRenderState;
 import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.resources.Identifier;
 import net.minecraft.util.Mth;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.phys.Vec3;
 
 /** Draws the drone with DroneModel, leaning into its motion the way a quadcopter tilts to fly */
 public final class DroneRenderer extends EntityRenderer<DroneEntity, DroneRenderState> {
@@ -53,6 +56,15 @@ public final class DroneRenderer extends EntityRenderer<DroneEntity, DroneRender
 		double right = dx * -Mth.cos(yaw) + dz * -Mth.sin(yaw);
 		state.leanForward = Mth.clamp((float) forward * LEAN_PER_SPEED, -MAX_LEAN, MAX_LEAN);
 		state.leanRight = Mth.clamp((float) right * LEAN_PER_SPEED, -MAX_LEAN, MAX_LEAN);
+		state.eyeHeight = entity.getEyeHeight();
+		state.hurt = entity.hurtTime > 0;
+		state.beam = null;
+		if (entity.level().getEntity(entity.beamTarget()) instanceof LivingEntity target) {
+			Vec3 middle = target.getPosition(partialTicks).add(0.0, target.getBbHeight() * 0.5, 0.0);
+			state.beam = middle.subtract(entity.getEyePosition(partialTicks));
+			state.beamScale = Math.min(1.0F, (entity.beamCharge() + partialTicks) / DroneTools.BEAM_CHARGE);
+			state.beamTime = entity.tickCount + partialTicks;
+		}
 	}
 
 	@Override
@@ -66,8 +78,14 @@ public final class DroneRenderer extends EntityRenderer<DroneEntity, DroneRender
 		poseStack.translate(0.0F, -0.15F, 0.0F);
 		poseStack.scale(-SCALE, -SCALE, SCALE);
 		poseStack.translate(0.0F, EntityModel.MODEL_Y_OFFSET, 0.0F);
-		collector.submitModel(this.model, state, poseStack, texture(state.tier), state.lightCoords, OverlayTexture.NO_OVERLAY, state.outlineColor);
+		collector.submitModel(this.model, state, poseStack, texture(state.tier), state.lightCoords, OverlayTexture.pack(OverlayTexture.u(0.0F), OverlayTexture.v(state.hurt)), state.outlineColor);
 		poseStack.popPose();
+		if (state.beam != null) {
+			poseStack.pushPose();
+			poseStack.translate(0.0F, state.eyeHeight, 0.0F);
+			GuardianBeam.submit(poseStack, collector, state.beam, state.beamTime, state.beamScale);
+			poseStack.popPose();
+		}
 		super.submit(state, poseStack, collector, camera);
 	}
 }

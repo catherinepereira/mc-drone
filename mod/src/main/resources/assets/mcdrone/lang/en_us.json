@@ -12,6 +12,7 @@
     "item.mcdrone.copper_drone": "Copper Drone",
     "item.mcdrone.iron_drone": "Iron Drone",
     "item.mcdrone.diamond_drone": "Diamond Drone",
+    "item.mcdrone.netherite_drone": "Netherite Drone",
     "item.mcdrone.tablet": "Drone Tablet",
     "block.mcdrone.charging_station": "Drone Charging Station"
 }

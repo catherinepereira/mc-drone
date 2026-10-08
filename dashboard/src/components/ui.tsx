@@ -28,7 +28,7 @@ export function Card({
   );
 }
 
-type Tone = "neutral" | "accent" | "green" | "red" | "amber";
+type Tone = "neutral" | "accent" | "green" | "red" | "amber" | "dark";
 
 const PILL: Record<Tone, string> = {
   neutral: "bg-sunken text-text-muted",
@@ -36,6 +36,7 @@ const PILL: Record<Tone, string> = {
   green: "bg-green-light text-green",
   red: "bg-red-light text-red",
   amber: "bg-amber-light text-amber",
+  dark: "bg-text-primary text-card",
 };
 
 export function Pill({

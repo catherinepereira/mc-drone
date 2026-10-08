@@ -9,18 +9,25 @@ import com.catherinepereira.mcdrone.task.Arena;
 import com.catherinepereira.mcdrone.task.ArenaRecord;
 import com.catherinepereira.mcdrone.task.DroneContainers;
 import com.catherinepereira.mcdrone.task.HarvestJob;
+import com.catherinepereira.mcdrone.task.PatrolJob;
 import com.catherinepereira.mcdrone.task.Region;
 import com.catherinepereira.mcdrone.task.RegionStore;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.Container;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.sounds.SoundEvents;
+import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.InteractionResult;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.monster.Enemy;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.Item;
@@ -41,6 +48,11 @@ import org.jspecify.annotations.Nullable;
  */
 public final class DroneTools {
 	public static final double REACH = 4.5;
+	// the attack beam locks on this far out, and fires once it has charged this many drone ticks
+	public static final double BEAM_RANGE = 10.0;
+	public static final int BEAM_CHARGE = 15;
+	// the client draws a mob where it was a tick ago, a lock counts this far outside the server's box
+	private static final double PICK_SLACK = 0.3;
 	// a container stays open while its center is within this distance of the drone's camera
 	public static final double CONTAINER_RANGE = REACH + 1.5;
 
@@ -68,12 +80,16 @@ public final class DroneTools {
 				case PLACE -> place(level, drone, req, changed, events, record);
 				case OPEN -> open(level, drone, events);
 				case CLOSE -> close(drone, events, "requested");
+				case ATTACK -> attack(level, drone, events, record);
 				case NONE -> {
 				}
 			}
 		}
 		if (req.tool() != DroneTool.BREAK && drone.breakingPos != null) {
 			stopMining(level, drone);
+		}
+		if (req.tool() != DroneTool.ATTACK && drone.beamTarget() >= 0) {
+			drone.setBeam(-1, 0);
 		}
 		if (req.transfer() != ToolRequest.NO_TRANSFER) {
 			transfer(level, drone, req, events);
@@ -159,6 +175,77 @@ public final class DroneTools {
 		e.add("pos", Json.pos(pos));
 		events.add(e);
 		stopMining(level, drone);
+	}
+
+	/**
+	 * The guardian's beam. Held on a hostile mob under the crosshair it locks on, and stays locked while the mob is alive,
+	 * in range, and in sight, wherever the crosshair goes. Every BEAM_CHARGE drone ticks it deals the tier's sword damage.
+	 * Only hostile mobs, so a drone leaves animals, villagers, and players alone
+	 */
+	private static void attack(ServerLevel level, DroneEntity drone, JsonArray events, @Nullable ArenaRecord record) {
+		LivingEntity target = level.getEntity(drone.beamTarget()) instanceof LivingEntity locked && inSight(level, drone, locked) ? locked : null;
+		if (target == null) {
+			target = pickMob(level, drone);
+			if (target == null) {
+				drone.setBeam(-1, 0);
+				events.add(event("attack_failed", "reason", "nothing in range"));
+				return;
+			}
+			if (!(target instanceof Enemy)) {
+				drone.setBeam(-1, 0);
+				JsonObject e = event("attack_failed", "reason", "not hostile");
+				e.addProperty("entity", BuiltInRegistries.ENTITY_TYPE.getKey(target.getType()).toString());
+				events.add(e);
+				return;
+			}
+			level.playSound(null, drone, SoundEvents.GUARDIAN_ATTACK, SoundSource.NEUTRAL, 1.0F, 1.0F);
+			drone.setBeam(target.getId(), 0);
+		}
+		int charge = drone.beamCharge() + 1;
+		if (charge < BEAM_CHARGE) {
+			drone.setBeam(target.getId(), charge);
+			return;
+		}
+		// the beam paces its hits in drone ticks, the mob's own hurt cooldown runs on world time, which lockstep doesn't keep
+		target.damageCooldownTime = 0;
+		// a mob attack from the drone, so the mob turns on it the way mobs go after a player's wolf that bit them
+		target.hurtServer(level, level.damageSources().mobAttack(drone), drone.tier().attackDamage());
+		drone.spendBreak();
+		boolean killed = !target.isAlive();
+		drone.setBeam(killed ? -1 : target.getId(), 0);
+		JsonObject e = event("attack", "entity", BuiltInRegistries.ENTITY_TYPE.getKey(target.getType()).toString());
+		e.addProperty("killed", killed);
+		events.add(e);
+		if (killed && record != null && record.job instanceof PatrolJob patrol) {
+			patrol.kills++;
+		}
+	}
+
+	private static boolean inSight(ServerLevel level, DroneEntity drone, LivingEntity mob) {
+		Vec3 eye = drone.getEyePosition();
+		Vec3 middle = mob.getBoundingBox().getCenter();
+		return mob.isAlive() && eye.distanceTo(middle) <= BEAM_RANGE
+			&& level.clip(new ClipContext(eye, middle, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, drone)).getType() == HitResult.Type.MISS;
+	}
+
+	// the nearest living thing the look ray meets within beam range before a block, players and drones left out
+	private static @Nullable LivingEntity pickMob(ServerLevel level, DroneEntity drone) {
+		Vec3 eye = drone.getEyePosition();
+		Vec3 end = eye.add(drone.getLookAngle().scale(BEAM_RANGE));
+		BlockHitResult wall = level.clip(new ClipContext(eye, end, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, drone));
+		if (wall.getType() == HitResult.Type.BLOCK) {
+			end = wall.getLocation();
+		}
+		LivingEntity best = null;
+		double bestDist = Double.MAX_VALUE;
+		for (LivingEntity mob : level.getEntitiesOfClass(LivingEntity.class, new AABB(eye, end).inflate(1.0), m -> m.isAlive() && !(m instanceof Player))) {
+			Optional<Vec3> hit = mob.getBoundingBox().inflate(mob.getPickRadius() + PICK_SLACK).clip(eye, end);
+			if (hit.isPresent() && eye.distanceTo(hit.get()) < bestDist) {
+				best = mob;
+				bestDist = eye.distanceTo(hit.get());
+			}
+		}
+		return best;
 	}
 
 	private static void stopMining(ServerLevel level, DroneEntity drone) {

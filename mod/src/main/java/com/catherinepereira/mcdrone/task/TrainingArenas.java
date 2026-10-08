@@ -14,11 +14,21 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Random;
+import java.util.UUID;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.util.Unit;
 import net.minecraft.world.Container;
+import net.minecraft.world.Difficulty;
+import net.minecraft.world.entity.EntitySpawnReason;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.EntityTypes;
+import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.item.DyeColor;
 import net.minecraft.world.item.Item;
@@ -49,6 +59,17 @@ public final class TrainingArenas {
 	private static final List<Item> TRANSFER_ITEMS = List.of(
 		Items.COBBLESTONE, Items.OAK_LOG, Items.IRON_INGOT, Items.WHEAT, Items.REDSTONE, Items.COAL, Items.BRICK, Items.STRING
 	);
+	// a hunt's mobs: the hostile ones the drone hunts, and animals it has to leave alone
+	private static final List<EntityType<? extends Mob>> HOSTILE_MOBS = List.of(EntityTypes.ZOMBIE, EntityTypes.HUSK, EntityTypes.SKELETON, EntityTypes.CREEPER);
+	private static final List<EntityType<? extends Mob>> PASSIVE_MOBS = List.of(EntityTypes.COW, EntityTypes.PIG, EntityTypes.SHEEP, EntityTypes.CHICKEN);
+	private static final int PASSIVE_COUNT = 2;
+	// marks the mobs an arena spawned, the next arena on the spot removes them
+	private static final String ARENA_TAG = "mcdrone_arena";
+	// find_block's target and look-alikes, kinds the block reader knows and the arena's terrain never makes
+	private static final List<Block> FIND_BLOCKS = List.of(
+		Blocks.BRICKS, Blocks.WOOL.pick(DyeColor.BLUE), Blocks.WOOL.pick(DyeColor.RED), Blocks.COAL_ORE, Blocks.SANDSTONE, Blocks.TERRACOTTA, Blocks.COBBLESTONE, Blocks.SPRUCE_PLANKS
+	);
+	private static final int FIND_DECOYS = 3;
 
 	private TrainingArenas() {
 	}
@@ -232,6 +253,59 @@ public final class TrainingArenas {
 					stock = Structures.stock(rng, target, 27);
 				}
 			}
+			case PATROL_AREA, HUNT_MOBS -> {
+				// the whole floor, its middle first among the key points so pillars leave it clear
+				keyPoints.add(new Vec3(ox + 0.5, terrain.ground(ox, oz) + 1.5, oz + 0.5));
+				List<UUID> mobs = null;
+				if (kind == TaskKind.HUNT_MOBS) {
+					wallIn(level, terrain, origin, radius);
+					mobs = spawnMobs(level, rng, record, keyPoints, terrain, Math.clamp(req.targets(), 1, 8));
+				}
+				int half = radius - 1;
+				record.job = PatrolJob.arena(new BlockPos(ox - half, origin.getY(), oz - half), new BlockPos(ox + half, origin.getY() + HEIGHT - 1, oz + half), mobs);
+			}
+			case GOTO_POINT -> {
+				// a point in the air, given as coordinates, nothing marks it
+				BlockPos cell = randomInside(rng, ox, oz, radius - 1, 0);
+				int y = Math.min(terrain.ground(cell.getX(), cell.getZ()) + 2 + rng.nextInt(5), terrain.ceiling(cell.getX(), cell.getZ()) - 2);
+				BlockPos point = new BlockPos(cell.getX(), y, cell.getZ());
+				record.job = GotoJob.point(point);
+				keyPoints.add(Vec3.atCenterOf(point));
+			}
+			case FIND_BLOCK -> {
+				// the named block and look-alikes of other kinds on stone pedestals 0 to 2 high
+				List<Block> kinds = new ArrayList<>(FIND_BLOCKS);
+				Collections.shuffle(kinds, rng);
+				for (int i = 0; i <= FIND_DECOYS; i++) {
+					BlockPos base = freeCell(rng, record, keyPoints, terrain, 1, 4.0);
+					int height = rng.nextInt(3);
+					for (int h = 0; h < height; h++) {
+						level.setBlock(base.above(h), Blocks.STONE.defaultBlockState(), FLAGS);
+					}
+					BlockPos top = base.above(height);
+					level.setBlock(top, kinds.get(i).defaultBlockState(), FLAGS);
+					(i == 0 ? record.targets : record.distractors).add(top);
+					keyPoints.add(Vec3.atCenterOf(top));
+				}
+				int half = radius - 1;
+				record.job = GotoJob.block(
+					level, new BlockPos(ox - half, origin.getY(), oz - half), new BlockPos(ox + half, origin.getY() + HEIGHT - 1, oz + half),
+					BuiltInRegistries.BLOCK.getKey(kinds.getFirst()).toString(), new ArrayList<>()
+				);
+			}
+			case FOLLOW_MOB -> {
+				// a villager wandering inside the arena's wall stands in for a player
+				keyPoints.add(new Vec3(ox + 0.5, terrain.ground(ox, oz) + 1.5, oz + 0.5));
+				wallIn(level, terrain, origin, radius);
+				Mob villager = EntityTypes.VILLAGER.create(level, EntitySpawnReason.EVENT);
+				BlockPos cell = freeCell(rng, record, keyPoints, terrain, 1, 3.0);
+				villager.snapTo(cell.getX() + 0.5, cell.getY(), cell.getZ() + 0.5, rng.nextFloat() * 360.0F, 0.0F);
+				villager.setPersistenceRequired();
+				villager.addTag(ARENA_TAG);
+				level.addFreshEntity(villager);
+				keyPoints.add(Vec3.atCenterOf(cell));
+				record.job = GotoJob.follow(villager, GotoJob.FOLLOW_TICKS);
+			}
 			case MINE_DEPOSIT -> {
 				int depth = Math.max(3, size / 2 + 1);
 				BlockPos min = site(level, rng, record, keyPoints, terrain, size, size, Blocks.STONE.defaultBlockState(), 0.0).above();
@@ -262,6 +336,60 @@ public final class TrainingArenas {
 		return new Member(req, rng, existing, record, spawn, yaw, BlockPos.containing(primary), stock);
 	}
 
+	/**
+	 * hostiles hostile mobs and PASSIVE_COUNT animals on free cells, each one a key point so pillars don't bury it.
+	 * Returns the hostile ones. Skeletons get a bow, and zombies and skeletons an unbreakable cap, the arena's sun would burn them
+	 */
+	private static List<UUID> spawnMobs(ServerLevel level, Random rng, ArenaRecord record, List<Vec3> keyPoints, Terrain terrain, int hostiles) {
+		if (level.getDifficulty() == Difficulty.PEACEFUL) {
+			throw new IllegalArgumentException("hunt_mobs needs a difficulty above peaceful, where hostile mobs vanish");
+		}
+		List<UUID> quarry = new ArrayList<>();
+		for (int i = 0; i < hostiles + PASSIVE_COUNT; i++) {
+			boolean hostile = i < hostiles;
+			List<EntityType<? extends Mob>> kinds = hostile ? HOSTILE_MOBS : PASSIVE_MOBS;
+			Mob mob = kinds.get(rng.nextInt(kinds.size())).create(level, EntitySpawnReason.EVENT);
+			if (mob == null) {
+				continue;
+			}
+			BlockPos cell = freeCell(rng, record, keyPoints, terrain, 1, 3.0);
+			mob.snapTo(cell.getX() + 0.5, cell.getY(), cell.getZ() + 0.5, rng.nextFloat() * 360.0F, 0.0F);
+			mob.setPersistenceRequired();
+			mob.addTag(ARENA_TAG);
+			if (mob.getType() == EntityTypes.SKELETON) {
+				mob.setItemSlot(EquipmentSlot.MAINHAND, new ItemStack(Items.BOW));
+			}
+			if (mob.getType() == EntityTypes.ZOMBIE || mob.getType() == EntityTypes.SKELETON) {
+				ItemStack cap = new ItemStack(Items.LEATHER_HELMET);
+				cap.set(DataComponents.UNBREAKABLE, Unit.INSTANCE);
+				mob.setItemSlot(EquipmentSlot.HEAD, cap);
+				mob.setDropChance(EquipmentSlot.HEAD, 0.0F);
+			}
+			level.addFreshEntity(mob);
+			keyPoints.add(Vec3.atCenterOf(cell));
+			if (hostile) {
+				quarry.add(mob.getUUID());
+			}
+		}
+		return quarry;
+	}
+
+	// a two-block gray concrete wall on the arena's border keeps a hunt's mobs in, raised to clear the ground beside it
+	private static void wallIn(ServerLevel level, Terrain terrain, BlockPos origin, int radius) {
+		BlockState wall = Blocks.CONCRETE.pick(DyeColor.GRAY).defaultBlockState();
+		int r = radius + 1;
+		for (int d = -r; d <= r; d++) {
+			for (int[] c : new int[][] {{d, -r}, {d, r}, {-r, d}, {r, d}}) {
+				int x = origin.getX() + c[0];
+				int z = origin.getZ() + c[1];
+				int beside = terrain.ground(Math.clamp(x, origin.getX() - radius, origin.getX() + radius), Math.clamp(z, origin.getZ() - radius, origin.getZ() + radius));
+				for (int y = origin.getY() + 1; y <= Math.max(origin.getY(), beside) + 2; y++) {
+					level.setBlock(new BlockPos(x, y, z), wall, FLAGS);
+				}
+			}
+		}
+	}
+
 	// spawns or moves the drone onto its spawn with a full battery and the task's items, and answers its request
 	private static TaskReadyPayload startDrone(ServerLevel level, ServerPlayer player, Member m) {
 		ArenaRecord record = m.record;
@@ -275,6 +403,7 @@ public final class TrainingArenas {
 		// arenas hand out a full drone, a player job may have run it down
 		drone.trainingArena = true;
 		drone.recharge();
+		drone.repair();
 		drone.setTier(record.tier);
 		drone.inventory.clearContent();
 		drone.openContainer = null;
@@ -590,6 +719,7 @@ public final class TrainingArenas {
 		}
 		AABB box = new AABB(ox - clearEdge, floorY, oz - clearEdge, ox + clearEdge + 1, floorY + HEIGHT + 1, oz + clearEdge + 1);
 		level.getEntitiesOfClass(ItemEntity.class, box).forEach(ItemEntity::discard);
+		level.getEntitiesOfClass(Mob.class, box, m -> m.entityTags().contains(ARENA_TAG)).forEach(Mob::discard);
 	}
 
 	/**

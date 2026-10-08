@@ -116,6 +116,8 @@ class DroneEnv(gym.Env):
         obs_spaces["state"] = spaces.Box(-np.inf, np.inf, shape=(state_dim,), dtype=np.float32)
         # position inside the geofence, -1 to 1 per axis, beyond that is out of bounds
         obs_spaces["bounds"] = spaces.Box(-np.inf, np.inf, shape=(3,), dtype=np.float32)
+        # the range sensors ahead and below as a share of their reach, 1 when nothing is in range
+        obs_spaces["range"] = spaces.Box(0.0, 1.0, shape=(2,), dtype=np.float32)
         if self.tools:
             obs_spaces["inventory"] = spaces.Box(0, 1 << 20, shape=(INVENTORY_SLOTS, 2), dtype=np.int32)
             obs_spaces["container"] = spaces.Box(0, 1 << 20, shape=(CONTAINER_SLOTS, 2), dtype=np.int32)
@@ -201,6 +203,7 @@ class DroneEnv(gym.Env):
             out["chase"] = obs.chase
         out["state"] = state_vector(obs.state, include_marker=not self.hide_marker)
         out["bounds"] = bounds_vector(obs.state)
+        out["range"] = range_vector(obs.state)
         if self.tools:
             out["inventory"] = self._slots(obs.state.get("inventory"), INVENTORY_SLOTS)
             container = obs.state.get("container")
@@ -222,6 +225,12 @@ class DroneEnv(gym.Env):
     @staticmethod
     def _info(obs: Observation) -> dict[str, Any]:
         return {"episode": obs.episode, "state": obs.state, "tick": obs.tick}
+
+
+def range_vector(state: dict[str, Any]) -> np.ndarray:
+    sensors = state.get("range") or {}
+    reach = sensors.get("max") or 1.0
+    return np.asarray([1.0 if sensors.get(k) is None else min(1.0, sensors[k] / reach) for k in ("front", "down")], dtype=np.float32)
 
 
 def bounds_vector(state: dict[str, Any]) -> np.ndarray:

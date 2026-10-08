@@ -1,6 +1,7 @@
 """
 Trains the block reader on recorded frames that carry the state stream.
-Labels come from the mod's block state ids, the reader itself only gets rgb and depth
+Labels come from the mod's block state ids, and for mobs from the mask stream's entity ids by mob category.
+The reader itself only gets rgb and depth
 """
 
 from __future__ import annotations
@@ -16,16 +17,16 @@ from mcdrone import list_episodes
 from torch.nn import functional as F
 
 from ..paths import CHECKPOINTS, DATA
-from ..perception.reader import CLASSES, NOT_CROP, BlockReader, state_tables
+from ..perception.reader import CLASSES, NOT_CROP, BlockReader, entity_table, state_tables
 from ..torch_utils import BestCheckpoint, autocast, pick_device, split_episodes, write_report
 
-CACHE = "reader-frames"
+CACHE = "reader-frames-mobs"
 FIELDS = ("rgb", "depth", "cls", "ripe")
 # neighboring frames are nearly identical, keep every STRIDE-th
 STRIDE = 3
 
 
-def cache_episode(episode, classes: np.ndarray, ripe: np.ndarray) -> dict[str, np.ndarray] | None:
+def cache_episode(episode, classes: np.ndarray, ripe: np.ndarray, entities: np.ndarray, entity_base: int) -> dict[str, np.ndarray] | None:
     cache = episode.path / CACHE
     if not (cache / "done").exists():
         frames = [n for n in range(0, len(episode.steps), STRIDE) if episode.has("state", n) and episode.has("rgb", n)]
@@ -34,9 +35,15 @@ def cache_episode(episode, classes: np.ndarray, ripe: np.ndarray) -> dict[str, n
         parts: dict[str, list] = {k: [] for k in FIELDS}
         for n in frames:
             ids = episode.block_states(n)
+            cls = classes[np.minimum(ids, len(classes) - 1)]
+            if episode.has("mask", n):
+                # the state stream has nothing for entities, the mask names them
+                mask = episode.mask(n).astype(np.int64)
+                mob = (mask >= entity_base) & (mask - entity_base < len(entities))
+                cls[mob] = entities[mask[mob] - entity_base]
             parts["rgb"].append(episode.rgb(n))
             parts["depth"].append(episode.depth(n).astype(np.float16))
-            parts["cls"].append(classes[np.minimum(ids, len(classes) - 1)])
+            parts["cls"].append(cls)
             parts["ripe"].append(ripe[np.minimum(ids, len(ripe) - 1)])
         cache.mkdir(exist_ok=True)
         for k, v in parts.items():
@@ -45,14 +52,26 @@ def cache_episode(episode, classes: np.ndarray, ripe: np.ndarray) -> dict[str, n
     return {k: np.load(cache / f"{k}.npy", mmap_mode="r") for k in FIELDS}
 
 
+def mob_categories(data: Path) -> dict[str, str]:
+    """Each entity's mob category by name, from any task folder's mask ids that list them, older ones don't"""
+    out: dict[str, str] = {}
+    for path in data.glob("*/mask_ids.json"):
+        ids = json.loads(path.read_text(encoding="utf-8"))
+        out.update(zip(ids["entities"], ids.get("categories", [])))
+    return out
+
+
 def load_frames(data: Path) -> list[dict[str, np.ndarray]]:
     out = []
+    categories = mob_categories(data)
     for task_dir in sorted(p for p in data.iterdir() if (p / "state_names.json").exists()):
         classes, ripe = state_tables(json.loads((task_dir / "state_names.json").read_text(encoding="utf-8")))
+        mask_ids = json.loads((task_dir / "mask_ids.json").read_text(encoding="utf-8"))
+        entities = entity_table(mask_ids["entities"], categories)
         # an episode without an outcome is still being recorded
         episodes = [ep for ep in list_episodes(data, task_dir.name) if (ep.path / "state").is_dir() and ep.meta.get("outcome")]
         for ep in episodes:
-            frames = cache_episode(ep, classes, ripe)
+            frames = cache_episode(ep, classes, ripe, entities, mask_ids["entityBase"])
             if frames is not None:
                 out.append(frames)
         print(f"{task_dir.name}: {len(episodes)} episodes", flush=True)
@@ -118,6 +137,18 @@ def evaluate(model, episodes, device, rng) -> dict[str, float]:
     return {"pixel_acc": float(correct / total), "mean_iou": float(iou.mean()), "ripe_acc": float(ripe_ok / max(ripe_n, 1)), "per_class_iou": per_class}
 
 
+def init_from(model: BlockReader, checkpoint: Path, device) -> None:
+    """Loads an older reader's weights, its class head row by row for the classes both have"""
+    saved = torch.load(checkpoint, map_location=device, weights_only=True)
+    weights = saved["model"]
+    model.load_state_dict({k: v for k, v in weights.items() if not k.startswith("classes.")}, strict=False)
+    with torch.no_grad():
+        for i, name in enumerate(saved["classes"]):
+            if name in CLASSES:
+                model.classes.weight[CLASSES.index(name)] = weights["classes.weight"][i]
+                model.classes.bias[CLASSES.index(name)] = weights["classes.bias"][i]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", type=Path, default=DATA)
@@ -126,6 +157,7 @@ def main() -> None:
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--eval-every", type=int, default=1000)
     parser.add_argument("--out", type=Path, default=CHECKPOINTS / "reader.pt")
+    parser.add_argument("--init", type=Path, default=None, help="start from a trained reader, classes it doesn't have start fresh")
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 
@@ -136,6 +168,8 @@ def main() -> None:
     print(f"train {len(train)} episodes ({sum(len(e['cls']) for e in train)} frames), val {len(val)} episodes, device {device}", flush=True)
 
     model = BlockReader().to(device)
+    if args.init is not None:
+        init_from(model, args.init, device)
     weights = class_weights(train, rng).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=args.lr, total_steps=args.steps)

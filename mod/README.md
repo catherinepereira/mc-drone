@@ -21,13 +21,14 @@ To use the mod in the regular launcher, install Fabric for 26.3 with the Fabric 
 
 ## In game
 
-Create a creative superflat world. The copper, iron, and diamond drones, the tablet, the charging station, and the marker block are in the Tools and Utilities tab, and all but the marker can be crafted, see Crafting.
+Create a creative superflat world. The copper, iron, diamond, and netherite drones, the tablet, the charging station, and the marker block are in the Tools and Utilities tab, and all but the marker can be crafted, see Crafting.
 
 | Key | Action |
 | --- | --- |
 | V | Enter or leave the drone camera |
 | N | Start a new episode of the config's `task` on its `terrain` (builds the arena under you on the first use) |
 | R | Open the drone inventory, and the container in front of the drone with it |
+| Left click while piloting | Hold the beam on the hostile mob under the crosshair, or mine the block |
 | B | Arm or stop recording, recording covers every episode that starts while armed |
 | F8 | Toggle the status panel |
 | J | Start a copy job from the tablet's selection |
@@ -59,11 +60,14 @@ The drone brain in `training` flies the jobs over the bridge, see its README. Wi
 
 A quadcopter a little under a block across, with spinning rotors, a camera pod that tilts with the camera, and a cargo chest under it. It leans into its motion. A nametag over it shows its name and its owner's, such as `Harvester (Steve)`. The owner renames it by using a named name tag on it, or from the dashboard's Control panel. Any player can use the drone (right click) to open the chest and put items in or take them out, within reach like a chest boat. The owner picks it back up by sneaking and using it with an empty hand, its cargo drops.
 
-| Tier | Breaks blocks like | Colors |
-| --- | --- | --- |
-| Copper | a copper pickaxe | copper arms, orange accents |
-| Iron | an iron pickaxe, faster, and diamond ore drops | gray arms, white accents |
-| Diamond | a diamond pickaxe, fastest, and obsidian drops | teal arms, cyan accents |
+| Tier | Breaks blocks like | Beam damage | Colors |
+| --- | --- | --- | --- |
+| Copper | a copper pickaxe | 5 | copper arms, orange accents |
+| Iron | an iron pickaxe, faster, and diamond ore drops | 6 | gray arms, white accents |
+| Diamond | a diamond pickaxe, faster, and obsidian drops | 7 | teal arms, cyan accents |
+| Netherite | a netherite pickaxe, fastest, the same drops as diamond. The item survives fire and lava | 8 | dark arms, mauve accents |
+
+The drone fights with a guardian's beam: held on a hostile mob up to 10 blocks away it locks on, charges from purple to yellow, and hits for the tier's sword damage. It never hits animals, villagers, or players. A mob it hits fights back, and only mobs can hurt a drone. A drone has 20 health and repairs on its home station. Shot down in your world, it drops its cargo and itself. Range sensors report the gap to the nearest block straight ahead and straight below, up to 4 blocks (`sensorRange` in the config).
 
 A player can own any number of drones. The tablet lists the loaded ones with their tier, charge, home station, and the job each is on, and the one you pick is the active drone that the job screen, piloting, and the HUD use. Placing a drone makes it the active one. Several drones fly at once, each with its own bridge controller, see docs/PROTOCOL.md.
 
@@ -89,6 +93,7 @@ Rows top to bottom, `_` is an empty slot.
 | --- | --- |
 | Copper, iron, or diamond drone | `M _ M` / `_ R _` / `M C M`, M a copper ingot, iron ingot, or diamond, R a block of redstone, C a chest |
 | Tablet | `I R I` / `I D I` / `I R I`, I an iron ingot, R redstone, D a diamond |
+| Netherite drone | a diamond drone, a netherite ingot, and a netherite upgrade template at a smithing table |
 | Charging station | `C L C` / `I R I` / `C C C`, C a copper ingot, L a lightning rod, I an iron ingot, R a block of redstone |
 
 ## Tasks
@@ -102,6 +107,8 @@ Rows top to bottom, `_` is an empty slot.
 | mine_and_deliver | mine every coal ore and put the coal in the chest |
 | replicate_build | copy the small build on the cyan base onto the lime base |
 | harvest_crops | harvest the ripe wheat in a field and replant every plot |
+| patrol_area | fly over every part of the arena |
+| hunt_mobs | kill the hostile mobs walled into the arena, leaving its animals alone |
 | copy_build | copy a random structure `size` wide onto a lime base |
 | schematic_build | build a random structure from a `.schem` file |
 | mine_deposit | mine every block of one kind from a stone deposit, most of them buried |
@@ -110,6 +117,14 @@ Rows top to bottom, `_` is an empty slot.
 | build_schematic | build a `.schem` file at a paste point, in your own world |
 | mine_region | mine every block of the chosen kinds inside a region, in your own world |
 | harvest_region | harvest and replant a crop in a region, in your own world |
+| patrol_region | fly over every part of a region, round after round, in your own world |
+| guard_region | patrol a region and kill the hostile mobs in it, in your own world |
+| goto_point | fly to a point given as coordinates |
+| find_block | find the one block of a named kind among look-alikes and fly to it |
+| follow_mob | stay 2 to 5 blocks from a wandering villager |
+| fly_to | fly to the paste point, in your own world |
+| seek_block | find a block of a named kind in a region and fly to it, in your own world |
+| follow_player | follow you at 2 to 5 blocks until stopped |
 | return_home | fly back to the drone's charging station and dock on it |
 
 Every arena task takes `terrain` (`flat`, `rough` with hills and trees, or `cave` with a roof, walls, and stalactites) and `obstacles` (stone brick pillars), and the structure arenas take `size`. The arena's footprint is a geofence: leaving it ends the episode with a penalty. Rewards and progress counters are in [docs/PROTOCOL.md](../docs/PROTOCOL.md#tasks).
@@ -143,7 +158,7 @@ Depth and mask come from raycasts, so they don't depend on the graphics backend.
 ## Tests
 
 ```powershell
-.\gradlew.bat runClientGameTest                  # launches a client and checks tasks, jobs, tiers, docking and the battery, the job queue, the drone's chest, frames, and recording over the bridge
+.\gradlew.bat runClientGameTest                  # launches a client and checks tasks, jobs, tiers, the attack tool, docking and the battery, the job queue, the drone's chest, frames, and recording over the bridge
 .\gradlew.bat runClientGameTest -Pe2eHold=600    # same, then keeps the world open for the end-to-end tests in training
 ```
 
@@ -161,7 +176,7 @@ src/gametest/   client gametest
 
 - Singleplayer only. The drone pose is client-authoritative and lockstep freezes the integrated server.
 - There is one game camera, so drones flying at once take turns rendering their frames, one frame each. The window shows whichever drone rendered last. Frames are cheap, the depth and mask raycast is most of a capture, so drones flying at once share about 150 captures a second.
-- Drops follow the tier's pickaxe. Gold, diamond, emerald, and redstone ore need an iron or diamond drone, and obsidian a diamond one. Mine jobs leave out kinds the drone gets nothing from, the job screen warns about them before you start, and the brain digs around those blocks.
+- Drops follow the tier's pickaxe. Gold, diamond, emerald, and redstone ore need an iron drone or better, and obsidian a diamond or netherite one. Mine jobs leave out kinds the drone gets nothing from, the job screen warns about them before you start, and the brain digs around those blocks.
 - RGB capture reads the main framebuffer, so frames show whatever the game window renders at its current FOV and settings. Keep the window open and unminimized while streaming.
 - Each lockstep step waits for one rendered frame, so step rate follows FPS. Minecraft drops to 10 FPS when the window is unfocused for a while, set Video Settings, Inactivity FPS Limit to Minimized to keep full speed in the background.
 - The marker block can't be broken in survival. It's meant for the arena, not gameplay.

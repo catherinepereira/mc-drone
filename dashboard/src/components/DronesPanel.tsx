@@ -7,6 +7,7 @@ const TIER_TONE = {
   copper: "amber",
   iron: "neutral",
   diamond: "accent",
+  netherite: "dark",
 } as const;
 
 /** Every loaded drone of the player's, with its charge, home station, the job it's on, and its job queue in run order */

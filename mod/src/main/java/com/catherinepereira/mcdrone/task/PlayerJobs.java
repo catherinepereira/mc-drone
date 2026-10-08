@@ -8,6 +8,8 @@ import com.catherinepereira.mcdrone.net.ResetTaskPayload;
 import com.catherinepereira.mcdrone.net.TaskReadyPayload;
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -22,7 +24,7 @@ public final class PlayerJobs {
 	}
 
 	/**
-	 * A copy, build, mine, harvest, or return-home job in the player's own world: nothing is built or cleared, the drone keeps its inventory, and
+	 * A copy, build, mine, harvest, patrol, guard, fly-to, seek, follow, or return-home job in the player's own world: nothing is built or cleared, the drone keeps its inventory, and
 	 * the player stays put. Every box has to be within JOB_REACH of the player, which keeps it in loaded chunks
 	 */
 	static TaskReadyPayload start(ServerPlayer player, ResetTaskPayload req, TaskKind kind) {
@@ -35,6 +37,8 @@ public final class PlayerJobs {
 		BlockPos b = new BlockPos(r[3], r[4], r[5]);
 		BlockPos dest = new BlockPos(r[6], r[7], r[8]);
 		DroneEntity drone = Drones.resolve(player, req.droneId());
+		// where a search's blocks are, for the client's scoring only, the drone finds them with its camera
+		List<BlockPos> found = new ArrayList<>();
 		DroneJob job = switch (kind) {
 			case RETURN_HOME -> {
 				if (drone == null || drone.home() == null) {
@@ -53,6 +57,10 @@ public final class PlayerJobs {
 			}
 			case MINE_REGION -> MineJob.start(level, a, b, req.subject(), drone != null ? drone.tier() : DroneTier.COPPER);
 			case HARVEST_REGION -> HarvestJob.start(level, a, b, req.subject());
+			case PATROL_REGION, GUARD_REGION -> PatrolJob.start(level, a, b, req.subject(), kind == TaskKind.GUARD_REGION);
+			case FLY_TO -> GotoJob.point(dest);
+			case SEEK_BLOCK -> GotoJob.block(level, a, b, req.subject(), found);
+			case FOLLOW_PLAYER -> GotoJob.follow(player, 0);
 			default -> throw new IllegalArgumentException(kind.id + " is not a job");
 		};
 		if (r.length == 15) {
@@ -68,7 +76,7 @@ public final class PlayerJobs {
 			}
 		}
 		if (drone != null) {
-			checkClear(level, drone, corners);
+			checkClear(level, drone, job, corners);
 		}
 
 		Vec3 start = drone != null ? drone.position() : player.getEyePosition().add(0, 1.0, 0);
@@ -92,6 +100,7 @@ public final class PlayerJobs {
 		}
 		ArenaRecord record = new ArenaRecord(kind, corners[0], 0);
 		record.job = job;
+		record.targets.addAll(found);
 		record.tier = drone.tier();
 		if (req.scan()) {
 			record.scan = Scans.write(level, job, kind.id + "-" + Long.toHexString(req.seed()));
@@ -104,9 +113,16 @@ public final class PlayerJobs {
 	}
 
 	// two drones working the same blocks would undo each other, so a job's boxes can't touch another drone's running job
-	private static void checkClear(ServerLevel level, DroneEntity drone, BlockPos[] corners) {
+	private static void checkClear(ServerLevel level, DroneEntity drone, DroneJob job, BlockPos[] corners) {
+		if (!job.changesBlocks()) {
+			return;
+		}
 		for (DroneEntity other : Arena.working(level, drone)) {
-			BlockPos[] theirs = Arena.record(other).job.corners();
+			DroneJob their = Arena.record(other).job;
+			if (!their.changesBlocks()) {
+				continue;
+			}
+			BlockPos[] theirs = their.corners();
 			for (int i = 0; i + 1 < corners.length; i += 2) {
 				for (int j = 0; j + 1 < theirs.length; j += 2) {
 					if (DroneJob.overlaps(corners[i], corners[i + 1], theirs[j], theirs[j + 1])) {

@@ -12,9 +12,15 @@ const TASKS = [
   "mine_and_deliver",
   "replicate_build",
   "harvest_crops",
+  "patrol_area",
+  "hunt_mobs",
+  "goto_point",
+  "find_block",
+  "follow_mob",
 ];
 
-// WASD moves, space and shift climb and descend, arrow keys turn, F held mines, G places, R opens or closes a container
+// WASD moves, space and shift climb and descend, arrow keys turn, F held mines, V held hits a hostile mob, G places,
+// R opens or closes a container
 function keysToAction(
   keys: Set<string>,
   tapped: Set<string>,
@@ -24,6 +30,7 @@ function keysToAction(
   const k = (code: string) => (keys.has(code) ? 1 : 0);
   let tool: Tool = "none";
   if (keys.has("KeyF")) tool = "break";
+  else if (keys.has("KeyV")) tool = "attack";
   else if (tapped.has("KeyG")) tool = "place";
   else if (tapped.has("KeyR")) tool = containerOpen ? "close" : "open";
   return {

@@ -1,5 +1,5 @@
 """
-PPO fine-tuning of the behavior cloning policy in the live mod (Schulman et al. 2017).
+PPO fine-tuning of the navigate policy in the live mod (Schulman et al. 2017), after behavior cloning.
 
 The actor starts from the BC checkpoint and the critic's encoder from the BC encoder.
 The first updates train only the critic, so early advantages aren't noise.
@@ -21,7 +21,7 @@ from mcdrone import DroneEnv
 from torch import nn
 
 from ..paths import CHECKPOINTS, REPORTS
-from ..policies.cnn import DronePolicy, to_image
+from ..policies.navigate import DronePolicy, to_image
 from ..torch_utils import load_weights, pick_device
 
 
@@ -51,8 +51,8 @@ def gae(rewards, values, dones, last_value, gamma: float, lam: float) -> tuple[n
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--init", type=Path, default=CHECKPOINTS / "bc.pt")
-    parser.add_argument("--out", type=Path, default=CHECKPOINTS / "ppo.pt")
+    parser.add_argument("--init", type=Path, default=CHECKPOINTS / "navigate.pt")
+    parser.add_argument("--out", type=Path, default=CHECKPOINTS / "navigate-ppo.pt")
     parser.add_argument("--updates", type=int, default=20)
     parser.add_argument("--rollout", type=int, default=1024)
     parser.add_argument("--epochs", type=int, default=4)

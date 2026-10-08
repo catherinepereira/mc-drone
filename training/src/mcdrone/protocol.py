@@ -103,7 +103,7 @@ def encode_obs(obs: Observation) -> bytes:
     return struct.pack("<I", len(header_bytes)) + header_bytes + b"".join(parts)
 
 
-TOOLS = ("none", "break", "place", "open", "close")
+TOOLS = ("none", "break", "place", "open", "close", "attack")
 
 
 def action(

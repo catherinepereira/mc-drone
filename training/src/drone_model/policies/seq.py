@@ -12,10 +12,10 @@ import math
 import numpy as np
 import torch
 from torch import nn
+from torch.nn import functional as F
 
-from ..experts.base import TOOLS
+from ..framework.spec import Agent, PolicySpec, Step
 from ..perception.blocks import BUILD_PALETTE
-from ..torch_utils import load_weights
 
 # block and item names the policy tells apart, everything else is "other"
 VOCAB = (
@@ -42,6 +42,10 @@ MOVE_DIM = 5
 HEIGHT, WIDTH = 60, 80
 DEPTH_MAX = 64.0
 COUNT_SCALE = 16.0
+# the tools the policy picks from, the drone's first five, it was trained before attack existed
+TOOLS = ("none", "break", "place", "open", "close")
+# place and break fire on a handful of steps per episode, weight them up against "none"
+TOOL_WEIGHTS = (1.0, 20.0, 20.0, 2.0, 2.0)
 
 
 def vocab_index(name: str | None) -> int:
@@ -149,30 +153,82 @@ def prev_features(move, tool: int) -> np.ndarray:
     return out
 
 
-class SeqAgent:
+def executed_features(action: dict | None) -> np.ndarray:
+    """The previous step's action as the policy reads it, nothing on the first step"""
+    if action is None:
+        return prev_features(np.zeros(MOVE_DIM, dtype=np.float32), 0)
+    return prev_features(np.asarray(action["move"], dtype=np.float32), int(action["tool"]))
+
+
+class SeqAgent(Agent):
     """Runs a trained SeqToolPolicy one env step at a time, carrying the LSTM state across the episode"""
 
-    def __init__(self, checkpoint, mask_ids: dict, device: torch.device) -> None:
-        self.device = device
-        self.model = SeqToolPolicy().to(device)
-        load_weights(self.model, checkpoint, device)
-        self.model.eval()
+    def __init__(self, model: SeqToolPolicy, mask_ids: dict) -> None:
+        self.model = model
+        self.device = next(model.parameters()).device
         self.lookup = mask_lookup(mask_ids)
         self.reset()
 
     def reset(self) -> None:
         self.hc = None
-        self.prev = prev_features(np.zeros(MOVE_DIM, dtype=np.float32), 0)
+        self.prev = executed_features(None)
 
     @torch.no_grad()
-    def act(self, state: dict, obs: dict) -> dict:
-        rgb, depth, mask = frame_features(obs["rgb"], obs["depth"], obs["mask"], self.lookup)
-        items, counts = inventory_features(state)
-        inputs = [rgb, depth, mask, state_features(state), items, counts, self.prev]
+    def act(self, step: Step) -> dict:
+        rgb, depth, mask = frame_features(step.obs["rgb"], step.obs["depth"], step.obs["mask"], self.lookup)
+        items, counts = inventory_features(step.state)
+        inputs = [rgb, depth, mask, state_features(step.state), items, counts, self.prev]
         tensors = [torch.from_numpy(np.asarray(a))[None, None].to(self.device) for a in inputs]
         move, tool, slot, self.hc = self.model(*tensors, self.hc)
-        move = move[0, 0].float().cpu().numpy()
-        tool = int(tool[0, 0].argmax())
-        slot = int(slot[0, 0].argmax())
-        self.prev = prev_features(move, tool)
-        return {"move": move, "tool": tool, "slot": slot, "transfer": np.zeros(2, dtype=np.int64)}
+        action = {
+            "move": move[0, 0].float().cpu().numpy(), "tool": int(tool[0, 0].argmax()), "slot": int(slot[0, 0].argmax()),
+            "transfer": np.zeros(2, dtype=np.int64),
+        }
+        self.executed(action)
+        return action
+
+    def executed(self, action: dict) -> None:
+        # the next step sees what actually flew, which under DAgger can be the teacher's action
+        self.prev = executed_features(action)
+
+
+class SeqSpec(PolicySpec):
+    """Trains on whole episodes, so the LSTM learns to carry what it saw early (the reference build) to where it acts on it"""
+
+    name = "seq"
+    sequence = True
+    # 8 full episodes overflow a 12 GB GPU with the game open, and Windows then pages video memory to RAM
+    batch_size = 4
+
+    def model(self) -> nn.Module:
+        return SeqToolPolicy()
+
+    def record(self, step: Step) -> dict[str, np.ndarray]:
+        rgb, depth, mask = frame_features(step.obs["rgb"], step.obs["depth"], step.obs["mask"], mask_lookup(step.mask_ids))
+        items, counts = inventory_features(step.state)
+        return {
+            "rgb": rgb, "depth": depth, "mask": mask, "state": state_features(step.state), "items": items, "counts": counts,
+            "prev": executed_features(step.prev), "move": np.asarray(step.label["move"], dtype=np.float32),
+            "tool": np.int64(step.label["tool"]), "slot": np.int64(step.label["slot"]),
+        }
+
+    def loss(self, model: nn.Module, b: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        move, tool, slot, _ = model(b["rgb"], b["depth"], b["mask"], b["state"], b["items"], b["counts"], b["prev"])
+        valid = b["valid"]
+        move_loss = F.mse_loss(move[valid].float(), b["move"][valid])
+        weights = torch.tensor(TOOL_WEIGHTS, device=tool.device)
+        tool_loss = F.cross_entropy(tool[valid].float(), b["tool"][valid], weight=weights)
+        # the slot matters most on the step a block goes down, and the teacher holds the next block's slot while lining up
+        placing = valid & (b["tool"] == TOOLS.index("place"))
+        # outside the build phase the teacher's slot is a default that can point at an empty slot, skip those
+        filled = valid & (b["counts"].gather(2, b["slot"].unsqueeze(-1)).squeeze(-1) > 0)
+        slot_all = F.cross_entropy(slot[filled].float(), b["slot"][filled]) if filled.any() else move_loss * 0
+        slot_place = F.cross_entropy(slot[placing].float(), b["slot"][placing]) if placing.any() else slot_all * 0
+        place_recall = (tool[placing].argmax(-1) == b["tool"][placing]).float().mean() if placing.any() else move_loss * 0
+        return {
+            "loss": move_loss + tool_loss + slot_place + 0.1 * slot_all, "move": move_loss, "tool": tool_loss, "slot": slot_place,
+            "place_recall": place_recall,
+        }
+
+    def agent(self, model: nn.Module, mask_ids: dict) -> Agent:
+        return SeqAgent(model, mask_ids)

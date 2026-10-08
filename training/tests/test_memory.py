@@ -45,7 +45,7 @@ def test_harvest_reads_ripe_crops_and_bare_plots_from_memory():
     from drone_model.experts.arena import HarvestExpert
     from drone_model.perception.memory import Cell
 
-    expert = HarvestExpert({"blocks": [], "entities": ["mcdrone:drone"], "entityBase": 32768}, reader=object())
+    expert = HarvestExpert({"blocks": [], "entities": ["mcdrone:drone", "minecraft:zombie", "minecraft:cow"], "categories": ["misc", "monster", "creature"], "entityBase": 32768}, reader=object())
     state = {"job": {"region": [0, 0, 0, 1, 1, 0], "crop": "minecraft:wheat"}}
 
     def believe(cell, name, ripe=0, unripe=0):
