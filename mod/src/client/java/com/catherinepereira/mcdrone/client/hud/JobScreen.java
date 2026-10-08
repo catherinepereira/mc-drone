@@ -1,10 +1,9 @@
 package com.catherinepereira.mcdrone.client.hud;
 
 import com.catherinepereira.mcdrone.client.ClientRuntime;
+import com.catherinepereira.mcdrone.client.Selection;
 import com.catherinepereira.mcdrone.entity.DroneEntity;
 import com.catherinepereira.mcdrone.entity.DroneTier;
-import com.google.gson.JsonArray;
-import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -98,10 +97,7 @@ public final class JobScreen extends Screen {
 		);
 		y = this.nextRow(y);
 
-		List<String> saved = new ArrayList<>();
-		for (JsonElement e : this.runtime.regions()) {
-			saved.add(e.getAsJsonObject().get("name").getAsString());
-		}
+		List<String> saved = this.runtime.regions().names();
 		List<String> withSelection = new ArrayList<>(saved);
 		withSelection.addFirst(SELECTION);
 
@@ -199,19 +195,8 @@ public final class JobScreen extends Screen {
 		return Component.literal(name.equals(NONE) ? "carried by the drone" : "mined from " + this.savedLabel(name));
 	}
 
-	// a saved region by name with its purpose and size, such as "quarry (mine, 8x4x8)"
 	private String savedLabel(String name) {
-		for (JsonElement e : this.runtime.regions()) {
-			JsonObject r = e.getAsJsonObject();
-			if (r.get("name").getAsString().equals(name)) {
-				JsonArray b = r.getAsJsonArray("box");
-				int sx = Math.abs(b.get(3).getAsInt() - b.get(0).getAsInt()) + 1;
-				int sy = Math.abs(b.get(4).getAsInt() - b.get(1).getAsInt()) + 1;
-				int sz = Math.abs(b.get(5).getAsInt() - b.get(2).getAsInt()) + 1;
-				return name + " (" + r.get("purpose").getAsString() + ", " + sx + "x" + sy + "x" + sz + ")";
-			}
-		}
-		return name;
+		return this.runtime.regions().label(name);
 	}
 
 	private void start(boolean queue) {
@@ -299,24 +284,13 @@ public final class JobScreen extends Screen {
 		return verb + listed + (need == null ? ", no drone gets drops" : ", needs " + need.id + " tier");
 	}
 
-	// the copy's source box as min and max corners, null before the tablet has a selection
+	// the copy's source box, null before the tablet has a selection
 	private BlockPos @Nullable [] sourceBox() {
+		Selection selection = this.runtime.selection;
 		if (this.region.equals(SELECTION)) {
-			BlockPos min = this.runtime.selection.min();
-			BlockPos size = this.runtime.selection.size();
-			return min == null || size == null ? null : new BlockPos[] {min, min.offset(size.getX() - 1, size.getY() - 1, size.getZ() - 1)};
+			return selection.cornerA == null || selection.cornerB == null ? null : new BlockPos[] {selection.cornerA, selection.cornerB};
 		}
-		for (JsonElement e : this.runtime.regions()) {
-			JsonObject r = e.getAsJsonObject();
-			if (r.get("name").getAsString().equals(this.region)) {
-				JsonArray b = r.getAsJsonArray("box");
-				return new BlockPos[] {
-					new BlockPos(b.get(0).getAsInt(), b.get(1).getAsInt(), b.get(2).getAsInt()),
-					new BlockPos(b.get(3).getAsInt(), b.get(4).getAsInt(), b.get(5).getAsInt())
-				};
-			}
-		}
-		return null;
+		return this.runtime.regions().box(this.region);
 	}
 
 	private void saveRegion() {

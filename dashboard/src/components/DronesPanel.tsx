@@ -1,7 +1,7 @@
 import type { DroneInfo } from "../protocol";
 import { useBridge } from "../stores/bridge";
 import { vec } from "../utils/format";
-import { Card, Pill } from "./ui";
+import { Button, Card, Pill } from "./ui";
 
 const TIER_TONE = {
   copper: "amber",
@@ -9,14 +9,30 @@ const TIER_TONE = {
   diamond: "accent",
 } as const;
 
-/** Every loaded drone of the player's, with its charge, home station, and job queue in run order */
+/** Every loaded drone of the player's, with its charge, home station, the job it's on, and its job queue in run order */
 export function DronesPanel() {
   // select the status, a fresh empty array from the selector would re-render forever
   const status = useBridge((s) => s.status);
+  const runQueues = useBridge((s) => s.runQueues);
   const drones = status?.drones ?? [];
+  const idleWithJobs = drones.some((d) => !d.episode && d.queue.length > 0);
 
   return (
-    <Card title="Drones" actions={<Pill>{drones.length} loaded</Pill>}>
+    <Card
+      title="Drones"
+      actions={
+        <div className="flex items-center gap-2">
+          <Button
+            onClick={runQueues}
+            disabled={!idleWithJobs}
+            title="Start the first queued job of every idle drone, they work at once"
+          >
+            Run every queue
+          </Button>
+          <Pill>{drones.length} loaded</Pill>
+        </div>
+      }
+    >
       {drones.length === 0 ? (
         <p className="text-text-dim text-sm">
           No drones loaded. Place one from its item in game.
@@ -44,6 +60,14 @@ function DroneRow({ drone }: { drone: DroneInfo }) {
         {drone.active && <Pill tone="green">active</Pill>}
         <Pill tone={TIER_TONE[drone.tier]}>{drone.tier}</Pill>
       </div>
+      {drone.episode && !drone.episode.done && (
+        <p className="text-text-primary mt-1 text-xs">
+          Working on {drone.episode.task.replaceAll("_", " ")}
+          {drone.controller
+            ? `, flown by ${drone.controller}`
+            : ", waiting for the brain"}
+        </p>
+      )}
       {drone.battery && (
         <div className="mt-2 flex items-center gap-2">
           <div className="bg-sunken h-1.5 flex-1 overflow-hidden rounded-full">

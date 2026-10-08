@@ -1,7 +1,7 @@
 package com.catherinepereira.mcdrone.client.mixin;
 
-import com.catherinepereira.mcdrone.client.ClientRuntime;
 import com.catherinepereira.mcdrone.client.McDroneClient;
+import com.catherinepereira.mcdrone.entity.DroneEntity;
 import net.minecraft.client.Minecraft;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -10,14 +10,13 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
- * While piloting, vanilla aims the parked player's attack and use at the drone's crosshair.
+ * With the camera in a drone, vanilla aims the parked player's attack and use at the drone's crosshair.
  * Cancel them so the mouse buttons only drive the drone's tools
  */
 @Mixin(Minecraft.class)
 abstract class MinecraftMixin {
 	private static boolean mcdrone$piloting() {
-		ClientRuntime runtime = McDroneClient.runtime();
-		return runtime != null && runtime.controller().piloting();
+		return Minecraft.getInstance().getCameraEntity() instanceof DroneEntity;
 	}
 
 	@Inject(method = "startAttack", at = @At("HEAD"), cancellable = true)

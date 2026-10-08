@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import time
 from pathlib import Path
 
@@ -12,8 +11,9 @@ import torch
 from torch import nn
 
 from ..paths import CHECKPOINTS, DATA
-from .demos import Demos, load_demos
 from ..policies.cnn import DronePolicy, to_image
+from ..torch_utils import BestCheckpoint, pick_device, split_episodes, write_report
+from .demos import Demos, load_demos
 
 
 
@@ -58,12 +58,9 @@ def main() -> None:
 
     torch.manual_seed(args.seed)
     rng = np.random.default_rng(args.seed)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = pick_device()
     demos = load_demos(args.data)
-
-    # split by episode so validation frames never share an episode with training frames
-    episodes = np.unique(demos.episode)
-    val_eps = rng.choice(episodes, size=max(1, int(len(episodes) * args.val_fraction)), replace=False)
+    _, val_eps = split_episodes(np.unique(demos.episode), args.val_fraction, rng)
     is_val = np.isin(demos.episode, val_eps)
     train_set, val_set = demos.subset(~is_val), demos.subset(is_val)
     print(f"train {len(train_set)} steps, val {len(val_set)} steps, device {device}")
@@ -72,24 +69,18 @@ def main() -> None:
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs)
     history = []
-    best = float("inf")
-    args.out.parent.mkdir(parents=True, exist_ok=True)
+    best = BestCheckpoint(args.out)
     for epoch in range(1, args.epochs + 1):
         start = time.perf_counter()
         train_loss = run_epoch(model, train_set, optimizer, device, args.batch_size, rng, train=True)
         val_loss = run_epoch(model, val_set, optimizer, device, args.batch_size, rng, train=False)
         scheduler.step()
         history.append({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss})
-        marker = ""
-        if val_loss < best:
-            best = val_loss
-            torch.save({"model": model.state_dict(), "epoch": epoch, "val_loss": val_loss}, args.out)
-            marker = " saved"
-        print(f"epoch {epoch:3d} train {train_loss:.4f} val {val_loss:.4f} {time.perf_counter() - start:.1f}s{marker}", flush=True)
+        saved = best.offer(val_loss, model=model.state_dict(), epoch=epoch, val_loss=val_loss)
+        print(f"epoch {epoch:3d} train {train_loss:.4f} val {val_loss:.4f} {time.perf_counter() - start:.1f}s{' saved' if saved else ''}", flush=True)
 
-    report = args.out.with_suffix(".json")
-    report.write_text(json.dumps({"args": {k: str(v) for k, v in vars(args).items()}, "best_val_loss": best, "history": history}, indent=2))
-    print(f"best val loss {best:.4f}, checkpoint {args.out}")
+    write_report(args.out.with_suffix(".json"), args, best_val_loss=best.best, history=history)
+    print(f"best val loss {best.best:.4f}, checkpoint {args.out}")
 
 
 if __name__ == "__main__":

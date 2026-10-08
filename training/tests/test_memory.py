@@ -39,3 +39,26 @@ def test_sky_adds_nothing():
     memory = VoxelMemory()
     depth, cls, ripe = frame(SKY)
     assert memory.observe(STATE, depth, cls, ripe) == [] and not memory.cells
+
+
+def test_harvest_reads_ripe_crops_and_bare_plots_from_memory():
+    from drone_model.experts.arena import HarvestExpert
+    from drone_model.perception.memory import Cell
+
+    expert = HarvestExpert({"blocks": [], "entities": ["mcdrone:drone"], "entityBase": 32768}, reader=object())
+    state = {"job": {"region": [0, 0, 0, 1, 1, 0], "crop": "minecraft:wheat"}}
+
+    def believe(cell, name, ripe=0, unripe=0):
+        c = expert.memory.cells.setdefault(cell, Cell())
+        c.votes[CLASSES.index(name)] = 10
+        c.ripe, c.unripe = ripe, unripe
+
+    for x in (0, 1):
+        believe((x, 0, 0), "minecraft:farmland")
+    believe((0, 1, 0), "minecraft:wheat", ripe=8, unripe=1)
+    assert expert.farm_y(state) == 0
+    assert expert.ripe_cells(state) == [(0, 1, 0)]
+    # the plot under the crop isn't swept, the bare one is
+    assert expert.sweep_plots(state) == [(1, 0, 0)]
+    expert.memory.cells[(0, 1, 0)].ripe = 0
+    assert expert.ripe_cells(state) == []

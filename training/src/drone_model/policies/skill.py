@@ -12,6 +12,7 @@ import numpy as np
 import torch
 from torch import nn
 
+from ..torch_utils import load_weights, pick_device
 from .seq import DEPTH_MAX, conv, frame_features, state_features
 
 MODES = ("view", "break", "place")
@@ -90,14 +91,14 @@ class SkillAgent:
     """A trained SkillPolicy behind the experts' skill hook"""
 
     def __init__(self, checkpoint, device: torch.device | None = None) -> None:
-        self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = device or pick_device()
         self.model = SkillPolicy().to(self.device)
-        self.model.load_state_dict(torch.load(checkpoint, map_location=self.device, weights_only=True)["model"])
+        load_weights(self.model, checkpoint, self.device)
         self.model.eval()
 
     @torch.no_grad()
     def act(self, state: dict, obs: dict, intent: dict) -> dict:
-        from ..experts.tools import tool_action
+        from ..experts.base import tool_action
 
         rgb, depth = frame(obs)
         tensors = [

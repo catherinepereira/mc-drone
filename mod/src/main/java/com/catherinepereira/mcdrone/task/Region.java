@@ -1,7 +1,6 @@
 package com.catherinepereira.mcdrone.task;
 
 import com.catherinepereira.mcdrone.Json;
-import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import net.minecraft.core.BlockPos;
 
@@ -10,11 +9,18 @@ import net.minecraft.core.BlockPos;
  * where those jobs work, general is any other named box, such as a copy source or a build site
  */
 public record Region(String id, String name, Purpose purpose, BlockPos min, BlockPos max) {
+	/** color is the outline's in game and on the web map, as 0xRRGGBB */
 	public enum Purpose {
-		GENERAL,
-		SAFE,
-		MINE,
-		FARM;
+		GENERAL(0x8A94A6),
+		SAFE(0x2E9E63),
+		MINE(0xC98A1B),
+		FARM(0x7DBA3A);
+
+		public final int color;
+
+		Purpose(int color) {
+			this.color = color;
+		}
 
 		public String id() {
 			return this.name().toLowerCase();
@@ -50,10 +56,7 @@ public record Region(String id, String name, Purpose purpose, BlockPos min, Bloc
 	}
 
 	public static Region fromJson(JsonObject json) {
-		JsonArray box = json.getAsJsonArray("box");
-		return of(
-			json.get("id").getAsString(), json.get("name").getAsString(), Purpose.parse(json.get("purpose").getAsString()),
-			new BlockPos(box.get(0).getAsInt(), box.get(1).getAsInt(), box.get(2).getAsInt()), new BlockPos(box.get(3).getAsInt(), box.get(4).getAsInt(), box.get(5).getAsInt())
-		);
+		BlockPos[] box = Json.readBox(json.getAsJsonArray("box"));
+		return of(json.get("id").getAsString(), json.get("name").getAsString(), Purpose.parse(json.get("purpose").getAsString()), box[0], box[1]);
 	}
 }

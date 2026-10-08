@@ -74,6 +74,7 @@ export interface EpisodeInfo {
   success?: boolean;
   truncated?: boolean;
   collisions?: number;
+  droneCollisions?: number;
   outOfBounds?: boolean;
   metrics?: number[];
 }
@@ -113,6 +114,9 @@ export interface DroneInfo {
   home: Vec3 | null;
   docked: boolean;
   queue: QueuedJob[];
+  // the bridge client flying it and the episode it's on, null while it isn't working
+  controller: string | null;
+  episode: { id: string; task: string; done: boolean; success: boolean } | null;
 }
 
 /** What the drone knows of its battery, costs are charge per tick or per block broken */

@@ -84,7 +84,7 @@ class FakeBridge:
                 if msg.get("schema") != SCHEMA:
                     ws.send(json.dumps({"type": "error", "message": "schema mismatch"}))
                     continue
-                ws.send(json.dumps({"type": "welcome", "role": msg["role"], "schema": SCHEMA, "config": self.config, "status": self._status(), "maskIds": {"blocks": [], "entities": [], "entityBase": 32768}, "itemIds": ["minecraft:air", "minecraft:coal"]}))
+                ws.send(json.dumps({"type": "welcome", "role": msg["role"], "schema": SCHEMA, "config": self.config, "status": self._status(), "maskIds": {"blocks": [], "entities": ["mcdrone:drone"], "entityBase": 32768}, "itemIds": ["minecraft:air", "minecraft:coal"]}))
             elif kind == "configure":
                 if "mode" in msg:
                     self.mode = msg["mode"]

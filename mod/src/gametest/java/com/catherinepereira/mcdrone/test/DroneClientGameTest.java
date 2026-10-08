@@ -3,6 +3,7 @@ package com.catherinepereira.mcdrone.test;
 import com.catherinepereira.mcdrone.client.ClientRuntime;
 import com.catherinepereira.mcdrone.client.McDroneClient;
 import com.catherinepereira.mcdrone.client.hud.JobScreen;
+import com.catherinepereira.mcdrone.client.obs.Raycaster;
 import com.catherinepereira.mcdrone.ModContent;
 import com.catherinepereira.mcdrone.entity.DroneEntity;
 import com.catherinepereira.mcdrone.entity.DroneItem;
@@ -13,6 +14,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Random;
 import net.fabricmc.fabric.api.client.gametest.v1.FabricClientGameTest;
 import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext;
 import net.fabricmc.fabric.api.client.gametest.v1.context.TestSingleplayerContext;
@@ -21,13 +23,20 @@ import net.minecraft.client.InactivityFpsLimit;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.inventory.ChestMenu;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.levelgen.Heightmap;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.HitResult;
+import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.phys.shapes.CollisionContext;
 
 /**
  * Runs in a full game client: builds a superflat world, flies navigate_to over the bridge in lockstep
@@ -227,7 +236,7 @@ public class DroneClientGameTest implements FabricClientGameTest {
 			saveGuard.addProperty("name", "gametest guard");
 			saveGuard.addProperty("purpose", "safe");
 			bridge.send(saveGuard);
-			ctx.waitFor(mc -> runtime.regions().size() == 1, 100);
+			ctx.waitFor(mc -> runtime.regions().all().size() == 1, 100);
 			boolean refused = false;
 			for (int i = 0; i < 150 && !refused; i++) {
 				JsonObject step = msg("step");
@@ -242,9 +251,9 @@ public class DroneClientGameTest implements FabricClientGameTest {
 			}
 			check(refused, "no break_failed event while mining inside a safe region");
 			JsonObject dropGuard = msg("region_delete");
-			dropGuard.addProperty("region", runtime.regions().get(0).getAsJsonObject().get("id").getAsString());
+			dropGuard.addProperty("region", runtime.regions().all().get(0).getAsJsonObject().get("id").getAsString());
 			bridge.send(dropGuard);
-			ctx.waitFor(mc -> runtime.regions().isEmpty(), 100);
+			ctx.waitFor(mc -> runtime.regions().all().isEmpty(), 100);
 
 			boolean dug = false;
 			for (int i = 0; i < 400 && !dug; i++) {
@@ -440,6 +449,166 @@ public class DroneClientGameTest implements FabricClientGameTest {
 			ctx.waitFor(mc -> runtime.controller().drone().queue().isEmpty() && runtime.task().active() && runtime.task().kind() == TaskKind.RETURN_HOME, 200);
 			ctx.takeScreenshot("mcdrone-docked");
 
+			// several drones at once: a second drone gets its own controller and a mine job, a job on the same blocks is
+			// refused, and both drones step in turn with every frame from the drone that asked for it
+			int[] scout = world.getServer().computeOnServer(server -> {
+				ServerPlayer player = server.getPlayerList().getPlayers().getFirst();
+				DroneEntity drone = Drones.active(player);
+				ServerLevel level = player.level();
+				BlockPos column = BlockPos.containing(drone.position()).offset(-8, 0, 0);
+				BlockPos coal = new BlockPos(column.getX(), level.getHeight(Heightmap.Types.WORLD_SURFACE, column.getX(), column.getZ()) - 1, column.getZ());
+				level.setBlock(coal, Blocks.COAL_ORE.defaultBlockState(), Block.UPDATE_ALL);
+				DroneEntity second = DroneItem.spawnFor(level, player, Vec3.atCenterOf(coal.above(3)), 0.0F, DroneTier.IRON);
+				Drones.setActive(player, drone);
+				return new int[] {second.getId(), coal.getX(), coal.getY(), coal.getZ()};
+			});
+			ctx.waitFor(mc -> mc.level.getEntity(scout[0]) instanceof DroneEntity, 100);
+			BridgeTestClient second = new BridgeTestClient();
+			try {
+				second.connect(PORT);
+			} catch (Exception e) {
+				throw new AssertionError("second bridge client couldn't connect", e);
+			}
+			JsonObject secondHello = msg("hello");
+			secondHello.addProperty("role", "controller");
+			secondHello.addProperty("schema", ClientRuntime.SCHEMA);
+			secondHello.addProperty("client", "gametest-scout");
+			secondHello.addProperty("drone", scout[0]);
+			second.send(secondHello);
+			JsonObject secondWelcome = awaitText(ctx, second, "welcome");
+			check(secondWelcome.get("role").getAsString().equals("controller") && secondWelcome.get("drone").getAsInt() == scout[0], "the scout's controller got " + secondWelcome);
+
+			JsonArray scoutOre = ints(scout[1], scout[2], scout[3]);
+			JsonObject scoutOptions = new JsonObject();
+			scoutOptions.addProperty("task", "mine_region");
+			scoutOptions.addProperty("blocks", "coal_ore");
+			scoutOptions.add("region", ints(scout[1] - 1, scout[2] - 1, scout[3] - 1, scout[1] + 1, scout[2] + 1, scout[3] + 1));
+			JsonObject scoutJob = msg("reset");
+			scoutJob.addProperty("id", id);
+			scoutJob.add("options", scoutOptions);
+			second.send(scoutJob);
+			BridgeTestClient.Obs scoutObs = awaitObs(ctx, second, id++);
+			check(droneId(scoutObs) == scout[0], "the scout's reset answered with drone " + droneId(scoutObs));
+
+			JsonObject clash = msg("reset");
+			clash.addProperty("id", id);
+			clash.add("options", scoutOptions);
+			bridge.send(clash);
+			String clashError = awaitError(ctx, bridge, id++);
+			check(clashError.contains("is working there"), "a job on the scout's blocks wasn't refused: " + clashError);
+
+			JsonObject homeAgain = msg("reset");
+			homeAgain.addProperty("id", id);
+			homeAgain.add("options", homeOptions);
+			bridge.send(homeAgain);
+			obs = awaitObs(ctx, bridge, id++);
+			int mainDrone = droneId(obs);
+			check(mainDrone != scout[0], "both controllers fly drone " + mainDrone);
+			boolean scoutDone = false;
+			boolean mainDone = false;
+			for (int i = 0; i < 400 && !scoutDone; i++) {
+				if (!mainDone) {
+					JsonObject step = msg("step");
+					step.addProperty("id", id);
+					step.add("action", dockAction(obs.header().getAsJsonObject("state"), station));
+					bridge.send(step);
+					obs = awaitObs(ctx, bridge, id++);
+					check(droneId(obs) == mainDrone, "a step of drone " + mainDrone + " answered with drone " + droneId(obs));
+					mainDone = obs.header().getAsJsonObject("episode").get("success").getAsBoolean();
+				}
+				JsonObject step = msg("step");
+				step.addProperty("id", id);
+				step.add("action", digActionAt(scoutObs.header().getAsJsonObject("state"), scoutOre));
+				second.send(step);
+				scoutObs = awaitObs(ctx, second, id++);
+				check(droneId(scoutObs) == scout[0], "a step of the scout answered with drone " + droneId(scoutObs));
+				scoutDone = scoutObs.header().getAsJsonObject("episode").get("success").getAsBoolean();
+			}
+			check(scoutDone, "the scout never mined its ore, metrics " + scoutObs.header().getAsJsonObject("episode").get("metrics"));
+			checkFrame(scoutObs);
+			String scoutController = ctx.computeOnClient(mc -> {
+				for (var d : runtime.statusJson().getAsJsonArray("drones")) {
+					if (d.getAsJsonObject().get("id").getAsInt() == scout[0]) {
+						return d.getAsJsonObject().get("controller").getAsString();
+					}
+				}
+				return "missing";
+			});
+			check(scoutController.equals("gametest-scout"), "the status lists the scout's controller as " + scoutController);
+
+			// drones are solid to each other: the scout's path into the main drone runs into its box
+			boolean bumps = ctx.computeOnClient(mc -> {
+				DroneEntity scoutDrone = (DroneEntity) mc.level.getEntity(scout[0]);
+				DroneEntity main = (DroneEntity) mc.level.getEntity(mainDrone);
+				Vec3 toward = main.position().subtract(scoutDrone.position());
+				return !mc.level.getEntityCollisions(scoutDrone, scoutDrone.getBoundingBox().expandTowards(toward)).isEmpty();
+			});
+			check(bumps, "the scout's path into the main drone found nothing to collide with");
+
+			// the raycaster skips all-air sections, it has to find what Level.clip finds
+			String clipProblem = ctx.computeOnClient(mc -> {
+				Vec3 eye = mc.level.getEntity(mainDrone).getEyePosition();
+				Random rays = new Random(7);
+				for (int i = 0; i < 2000; i++) {
+					Vec3 to = eye.add(new Vec3(rays.nextGaussian(), rays.nextGaussian(), rays.nextGaussian()).normalize().scale(64.0));
+					BlockHitResult fast = Raycaster.clip(mc.level, eye, to);
+					BlockHitResult vanilla = mc.level.clip(new ClipContext(eye, to, ClipContext.Block.OUTLINE, ClipContext.Fluid.ANY, CollisionContext.empty()));
+					boolean same = vanilla.getType() == HitResult.Type.MISS
+						? fast == null
+						: fast != null && fast.getBlockPos().equals(vanilla.getBlockPos()) && fast.getLocation().distanceTo(vanilla.getLocation()) < 1.0E-6;
+					if (!same) {
+						return "ray to " + to + " hit " + (fast == null ? "nothing" : fast.getBlockPos()) + ", Level.clip hit " + vanilla.getType() + " " + vanilla.getBlockPos();
+					}
+				}
+				return "";
+			});
+			check(clipProblem.isEmpty(), clipProblem);
+			ctx.takeScreenshot("mcdrone-two-drones");
+			second.send(msg("release"));
+			ctx.waitTicks(10);
+			second.close();
+
+			// a fleet: two drones with different tasks share one arena, and the reset that comes first waits for the other
+			BridgeTestClient scoutAgain = new BridgeTestClient();
+			try {
+				scoutAgain.connect(PORT);
+			} catch (Exception e) {
+				throw new AssertionError("the scout's controller couldn't reconnect", e);
+			}
+			scoutAgain.send(secondHello);
+			awaitText(ctx, scoutAgain, "welcome");
+			int scoutReset = id++;
+			scoutAgain.send(fleetReset(scoutReset, "dig_block", 1));
+			ctx.waitTicks(20);
+			check(scoutAgain.frames.isEmpty(), "a fleet reset was answered before the whole fleet asked");
+			int mainReset = id++;
+			bridge.send(fleetReset(mainReset, "navigate_to", 0));
+			BridgeTestClient.Obs mainFleet = awaitObs(ctx, bridge, mainReset);
+			BridgeTestClient.Obs scoutFleet = awaitObs(ctx, scoutAgain, scoutReset);
+			JsonObject mainArena = mainFleet.header().getAsJsonObject("state").getAsJsonObject("arena");
+			JsonObject scoutArena = scoutFleet.header().getAsJsonObject("state").getAsJsonObject("arena");
+			check(droneId(mainFleet) == mainDrone && droneId(scoutFleet) == scout[0], "the fleet answered with drones " + droneId(mainFleet) + " and " + droneId(scoutFleet));
+			check(mainArena.get("origin").equals(scoutArena.get("origin")) && mainArena.get("radius").equals(scoutArena.get("radius")), "the fleet got two arenas, " + mainArena.get("origin") + " and " + scoutArena.get("origin"));
+			check(mainArena.get("task").getAsString().equals("navigate_to") && scoutArena.get("task").getAsString().equals("dig_block"), "the fleet's tasks got mixed up");
+			check(mainArena.get("radius").getAsInt() > 12, "the shared arena didn't grow for two drones, radius " + mainArena.get("radius"));
+			for (BridgeTestClient client : new BridgeTestClient[] {bridge, scoutAgain}) {
+				JsonObject step = msg("step");
+				step.addProperty("id", id);
+				client.send(step);
+				awaitObs(ctx, client, id++);
+			}
+			scoutAgain.send(msg("release"));
+			ctx.waitTicks(10);
+			scoutAgain.close();
+			// a third drone, so the held world can run three-drone fleets for the training package
+			world.getServer().computeOnServer(server -> {
+				ServerPlayer player = server.getPlayerList().getPlayers().getFirst();
+				DroneEntity main = Drones.active(player);
+				DroneItem.spawnFor(player.level(), player, main.position().add(3.0, 0.0, 0.0), 0.0F, DroneTier.COPPER);
+				Drones.setActive(player, main);
+				return null;
+			});
+
 			JsonObject stop = msg("record");
 			stop.addProperty("on", false);
 			bridge.send(stop);
@@ -453,6 +622,12 @@ public class DroneClientGameTest implements FabricClientGameTest {
 			ctx.waitFor(mc -> runtime.recorder().queueDepth() == 0, 200);
 			check(Files.isDirectory(data), "no recordings in " + data);
 			check(!runtime.recorder().dataDir().equals(testData), "recording stayed on the test folder after it stopped");
+
+			// with BlueMap installed its web app gets the drones' positions every second and the script that moves their markers
+			if (FabricLoader.getInstance().isModLoaded("bluemap")) {
+				Path script = FabricLoader.getInstance().getGameDir().resolve("bluemap/web/mcdrone/drones.js");
+				ctx.waitFor(mc -> Files.exists(script) && Files.exists(script.resolveSibling("drones.json")), 600);
+			}
 
 			holdForExternalDriver(ctx);
 		}
@@ -653,12 +828,48 @@ public class DroneClientGameTest implements FabricClientGameTest {
 		return found[0];
 	}
 
+	private static int droneId(BridgeTestClient.Obs obs) {
+		return obs.header().getAsJsonObject("state").get("droneId").getAsInt();
+	}
+
+	/** The message of the error answering request replyTo */
+	private static String awaitError(ClientGameTestContext ctx, BridgeTestClient bridge, int replyTo) {
+		String[] found = new String[1];
+		ctx.waitFor(mc -> {
+			JsonObject next;
+			while ((next = bridge.texts.poll()) != null) {
+				var r = next.get("replyTo");
+				if (next.get("type").getAsString().equals("error") && r != null && !r.isJsonNull() && r.getAsInt() == replyTo) {
+					found[0] = next.get("message").getAsString();
+					return true;
+				}
+			}
+			return false;
+		}, 200);
+		return found[0];
+	}
+
 	private static JsonArray ints(int... values) {
 		JsonArray a = new JsonArray();
 		for (int v : values) {
 			a.add(v);
 		}
 		return a;
+	}
+
+	// a reset into the gametest's two-drone fleet
+	private static JsonObject fleetReset(int id, String task, int member) {
+		JsonObject reset = msg("reset");
+		reset.addProperty("id", id);
+		JsonObject options = new JsonObject();
+		options.addProperty("task", task);
+		JsonObject fleet = new JsonObject();
+		fleet.addProperty("group", "gametest");
+		fleet.addProperty("size", 2);
+		fleet.addProperty("member", member);
+		options.add("fleet", fleet);
+		reset.add("options", options);
+		return reset;
 	}
 
 	private static JsonObject msg(String type) {

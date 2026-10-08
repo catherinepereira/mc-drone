@@ -15,10 +15,8 @@ import numpy as np
 from ..energy import fly_home
 from ..perception.memory import AIR, MIN_VOTES, Cell, VoxelMemory
 from ..perception.reader import CLASSES, INDEX, OTHER, SKY
-from .tools import (
-    SURVEY_LIMIT, TOP_LEAN, TOP_VIA_HEIGHT, VIA_DIST, HarvestExpert, HonestExpert, center,
-    tool_action,
-)
+from .arena import HarvestExpert, make_expert
+from .base import SURVEY_LIMIT, TOP_LEAN, TOP_VIA_HEIGHT, VIA_DIST, HonestExpert, center, tool_action
 
 VIEW_SPACING = 4.0
 VIEW_DIST = 4.0
@@ -721,14 +719,13 @@ class MinePlanner(JobPlanner):
 
 class HarvestPlanner(HarvestExpert):
     """
-    The harvest expert with a voxel memory, so its reads show on the dashboard.
+    The harvest expert for a player's job.
     With a scanned field it skips the survey, takes ripeness from each crop's age, and plants the plots the scan found bare
     without looking at them first
     """
 
     def __init__(self, mask_ids: dict, depth_max: float = 64.0, reader=None, schematics: Path | None = None) -> None:
         super().__init__(mask_ids, depth_max, reader)
-        self.memory = VoxelMemory()
         self.schematics = schematics
         # block states of the field by cell, empty in vision perception
         self.field_scan: dict[tuple[int, int, int], str] | None = None
@@ -777,6 +774,13 @@ class DockPlanner(HonestExpert):
 
     def decide(self, state: dict) -> dict:
         return fly_home(self, state, state["job"]["station"])
+
+
+def episode_expert(task: str, job: dict | None, mask_ids: dict, reader, schematics: Path | None = None) -> HonestExpert:
+    """The job planner for an episode that hands the drone a job, the planners need the block reader, else the task's expert"""
+    if job and reader is not None:
+        return make_planner(job, mask_ids, reader, schematics)
+    return make_expert(task, mask_ids, reader=reader)
 
 
 def make_planner(job: dict, mask_ids: dict, reader, schematics: Path | None = None) -> HonestExpert:

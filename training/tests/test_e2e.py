@@ -7,6 +7,7 @@ MCDRONE_E2E=1 pytest tests/test_e2e.py
 import json
 import math
 import os
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -123,3 +124,32 @@ def test_http_status_config_and_origin_guard():
         http("GET", "/api/status", origin="http://evil.example")
     assert err.value.code == 403
     assert json.loads(http("GET", "/api/status", origin="http://localhost:5318"))["inWorld"]
+
+
+def test_fleet_shares_one_arena_and_waits_for_every_drone():
+    drones = [d["id"] for d in json.loads(http("GET", "/api/status"))["drones"]][:2]
+    assert len(drones) == 2, "the held world needs two drones"
+    tasks = ["navigate_to", "dig_block"]
+    envs = [DroneEnv(task=task, drone=drone, tools=True) for task, drone in zip(tasks, drones)]
+    infos: dict[int, dict] = {}
+    group = f"e2e-{time.time()}"
+
+    def reset(member: int) -> None:
+        infos[member] = envs[member].reset(seed=40 + member, options={"fleet": {"group": group, "size": 2, "member": member}})[1]
+
+    try:
+        threads = [threading.Thread(target=reset, args=(m,)) for m in range(2)]
+        threads[1].start()
+        time.sleep(2.0)
+        assert 1 not in infos, "a fleet reset answered before the whole fleet asked"
+        threads[0].start()
+        for t in threads:
+            t.join(timeout=60)
+        arenas = [infos[m]["state"]["arena"] for m in range(2)]
+        assert arenas[0]["origin"] == arenas[1]["origin"] and [a["task"] for a in arenas] == tasks
+        assert {infos[m]["state"]["droneId"] for m in range(2)} == set(drones)
+        for env in envs:
+            env.step(env.action_space.sample())
+    finally:
+        for env in envs:
+            env.close()

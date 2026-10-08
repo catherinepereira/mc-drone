@@ -1,12 +1,9 @@
+import { shortName } from "../blockColors";
 import type { DroneAction, Slot, Transfer } from "../protocol";
 import { useBridge } from "../stores/bridge";
 import { Card, Pill } from "./ui";
 
 const IDLE: DroneAction = { move: [0, 0, 0], look: [0, 0] };
-
-function shortName(id: string): string {
-  return id.replace(/^minecraft:/, "").replaceAll("_", " ");
-}
 
 function SlotGrid({
   slots,

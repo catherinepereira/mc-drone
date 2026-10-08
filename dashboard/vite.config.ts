@@ -16,6 +16,8 @@ export default defineConfig({
   server: {
     port: DEV_FRONTEND_PORT,
     strictPort: true,
+    // a Windows folder mounted into the container sends no change events, so edits only show up by polling
+    watch: { usePolling: true },
     proxy: {
       "/api": {
         target: `http://${bridgeHost}:${DEV_BRIDGE_PORT}`,
@@ -29,6 +31,11 @@ export default defineConfig({
       [BLUEMAP_PATH]: {
         target: `http://${bridgeHost}:${DEV_BLUEMAP_PORT}`,
         rewrite: (path) => "/" + path.slice(BLUEMAP_PATH.length),
+        // tiles, settings, and the mod's script change while the game runs, revalidate instead of using a cached copy
+        configure: (proxy) =>
+          proxy.on("proxyRes", (res) => {
+            res.headers["cache-control"] = "no-cache";
+          }),
       },
     },
   },

@@ -260,6 +260,12 @@ public class DroneEntity extends Entity implements ItemSupplier {
 		return true;
 	}
 
+	// drones bump into each other, which counts as a collision in their episodes
+	@Override
+	public boolean canBeCollidedWith(@Nullable Entity other) {
+		return other instanceof DroneEntity;
+	}
+
 	@Override
 	public InteractionResult interact(Player player, InteractionHand hand, Vec3 location) {
 		ItemStack held = player.getItemInHand(hand);

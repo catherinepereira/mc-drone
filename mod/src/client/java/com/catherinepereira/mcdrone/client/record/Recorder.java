@@ -15,12 +15,17 @@ import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadPoolExecutor;
 import org.jspecify.annotations.Nullable;
 
 /**
- * Writes episodes to data/<task>/<id>/.
+ * Writes episodes to data/<task>/<id>/, one at a time per drone, keyed by the drone's entity id.
  * Step n pairs the frame captured before action n with action n, and the reward that action earned,
  * so each row is written when the following frame arrives
  */
@@ -36,8 +41,10 @@ public final class Recorder {
 
 	private boolean armed;
 	private boolean test;
-	private boolean sawInput;
-	private @Nullable Episode episode;
+	// appendLog runs on the bridge threads too
+	private final Map<Integer, Episode> episodes = new ConcurrentHashMap<>();
+	// drones whose latest episode saw an action that moved, turned, or used a tool
+	private final Set<Integer> sawInput = new HashSet<>();
 
 	/** Test recordings go to testDir, out of the training data */
 	public Recorder(Path dataDir, Path testDir, DroneLog log) {
@@ -51,9 +58,9 @@ public final class Recorder {
 		return this.test ? this.testDir : this.dataDir;
 	}
 
-	/** Whether any action since the latest episode began moved the drone, turned it, or used a tool */
-	public boolean sawInput() {
-		return this.sawInput;
+	/** Whether any action since the drone's latest episode began moved it, turned it, or used a tool */
+	public boolean sawInput(int drone) {
+		return this.sawInput.contains(drone);
 	}
 
 	public boolean armed() {
@@ -61,7 +68,11 @@ public final class Recorder {
 	}
 
 	public boolean recording() {
-		return this.episode != null;
+		return !this.episodes.isEmpty();
+	}
+
+	public boolean recording(int drone) {
+		return this.episodes.containsKey(drone);
 	}
 
 	public int queueDepth() {
@@ -76,31 +87,33 @@ public final class Recorder {
 	public void setArmed(boolean armed, boolean test) {
 		this.armed = armed;
 		this.test = armed && test;
-		if (!armed && this.episode != null) {
-			this.finish("stopped");
+		if (!armed) {
+			List.copyOf(this.episodes.keySet()).forEach(drone -> this.finish(drone, "stopped"));
 		}
 		this.log.info("record.armed", DroneLog.fields("on", armed, "test", this.test));
 	}
 
-	public void beginEpisode(String task, String id, JsonObject meta) {
-		if (this.episode != null) {
-			this.finish("replaced");
+	public void beginEpisode(int drone, String task, String id, JsonObject meta) {
+		if (this.episodes.containsKey(drone)) {
+			this.finish(drone, "replaced");
 		}
-		this.sawInput = false;
+		this.sawInput.remove(drone);
 		if (!this.armed) {
 			return;
 		}
 		Path dir = this.dataDir().resolve(task).resolve(id);
-		this.episode = new Episode(dir, meta);
-		Episode ep = this.episode;
+		Episode ep = new Episode(dir, meta);
+		this.episodes.put(drone, ep);
 		this.io.execute(() -> ep.open());
 		this.log.info("record.begin", DroneLog.fields("dir", dir.toString()));
 	}
 
-	/** Remembers the action applied after the latest frame */
-	public void onAction(DroneAction action) {
-		this.sawInput |= !action.idle();
-		Episode ep = this.episode;
+	/** Remembers the action applied after the drone's latest frame */
+	public void onAction(int drone, DroneAction action) {
+		if (!action.idle()) {
+			this.sawInput.add(drone);
+		}
+		Episode ep = this.episodes.get(drone);
 		if (ep == null) {
 			return;
 		}
@@ -110,8 +123,8 @@ public final class Recorder {
 		ep.pendingAction = action;
 	}
 
-	public void onObservation(Observation obs) {
-		Episode ep = this.episode;
+	public void onObservation(int drone, Observation obs) {
+		Episode ep = this.episodes.get(drone);
 		if (ep == null) {
 			return;
 		}
@@ -122,14 +135,14 @@ public final class Recorder {
 		ep.lastObs = obs;
 		if (obs.done()) {
 			this.writeStep(ep, obs, null, null);
-			this.finish(obs.episode.get("success").getAsBoolean() ? "success" : "timeout");
+			this.finish(drone, obs.episode.get("success").getAsBoolean() ? "success" : "timeout");
 		}
 	}
 
+	/** Every open episode gets the line, a log line doesn't say which drone it's about */
 	public void appendLog(JsonObject line) {
-		Episode ep = this.episode;
-		if (ep != null) {
-			String text = line.toString();
+		String text = line.toString();
+		for (Episode ep : this.episodes.values()) {
 			this.io.execute(() -> ep.writeLog(text));
 		}
 	}
@@ -150,9 +163,8 @@ public final class Recorder {
 		this.io.execute(() -> ep.writeFrame(n, frame, line));
 	}
 
-	private void finish(String outcome) {
-		Episode ep = this.episode;
-		this.episode = null;
+	private void finish(int drone, String outcome) {
+		Episode ep = this.episodes.remove(drone);
 		if (ep == null) {
 			return;
 		}

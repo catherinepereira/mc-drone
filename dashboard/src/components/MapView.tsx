@@ -1,28 +1,23 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { BLUEMAP_PATH, DEV_BLUEMAP_PORT } from "../config";
 import type { Vec3 } from "../protocol";
 import { useBridge } from "../stores/bridge";
 import { DronesPanel } from "./DronesPanel";
 import { Button, Card, Pill } from "./ui";
 
-// BlueMap reads its camera from the address: map, the point it looks at, distance, rotation, angle, tilt,
-// orthographic, and mode. The point rounds to whole blocks so the camera only moves when the drone does
-function cameraHash(map: string, pos: Vec3): string {
-  const [x, y, z] = pos.map(Math.round);
-  return `#${map}:${x}:${y}:${z}:45:0.5:0.9:0:0:perspective`;
-}
-
 /** BlueMap's web map of the world, with the mod's regions, drones, and charging stations as markers */
 export function MapView() {
   const status = useBridge((s) => s.status);
   const [up, setUp] = useState<boolean | null>(null);
-  const [mapId, setMapId] = useState<string | null>(null);
   const [follow, setFollow] = useState(true);
-  const [frozen, setFrozen] = useState("");
+  const frame = useRef<HTMLIFrameElement>(null);
   const drones = status?.drones ?? [];
   const active = drones.find((d) => d.active) ?? drones[0];
-  const live = mapId && active ? cameraHash(mapId, active.pos) : "";
-  const hash = follow ? live : frozen;
+  // where the mod's script in the map glides the camera, see the mod's bluemap/drones.js
+  const target = useRef<Vec3 | null>(null);
+  useEffect(() => {
+    target.current = follow && active ? active.pos : null;
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -30,13 +25,7 @@ export function MapView() {
       fetch(`${BLUEMAP_PATH}settings.json`)
         .then((r) => {
           if (!r.ok) throw new Error(`${r.status}`);
-          return r.json();
-        })
-        .then((s: { maps?: string[] }) => {
-          if (!cancelled) {
-            setUp(true);
-            setMapId(s.maps?.[0] ?? null);
-          }
+          if (!cancelled) setUp(true);
         })
         .catch(() => !cancelled && setUp(false));
     check();
@@ -47,6 +36,19 @@ export function MapView() {
     };
   }, []);
 
+  // the drone's position comes once a second, posting at that rate also covers a map that loaded later
+  useEffect(() => {
+    const timer = setInterval(
+      () =>
+        frame.current?.contentWindow?.postMessage(
+          { type: "mcdrone-follow", pos: target.current },
+          window.location.origin,
+        ),
+      1000,
+    );
+    return () => clearInterval(timer);
+  }, []);
+
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
       <Card
@@ -54,12 +56,9 @@ export function MapView() {
         actions={
           <div className="flex items-center gap-2">
             {up === false && <Pill tone="red">BlueMap offline</Pill>}
-            {up && live && (
+            {up && active && (
               <Button
-                onClick={() => {
-                  setFrozen(live);
-                  setFollow(!follow);
-                }}
+                onClick={() => setFollow(!follow)}
                 title="Keep the map on the active drone as it flies"
               >
                 {follow ? "Stop following" : "Follow the drone"}
@@ -79,15 +78,14 @@ export function MapView() {
         {up === false ? (
           <p className="text-text-muted text-sm">
             No map on port {DEV_BLUEMAP_PORT}. BlueMap runs in the game once
-            it's installed and <code>accept-download</code> is{" "}
-            <code>true</code> in the game's{" "}
-            <code>config/bluemap/core.conf</code>.
+            it's installed and <code>accept-download</code> is <code>true</code>{" "}
+            in the game's <code>config/bluemap/core.conf</code>.
           </p>
         ) : (
-          // a change to the hash alone moves BlueMap's camera without reloading the page
           <iframe
+            ref={frame}
             title="BlueMap"
-            src={`${BLUEMAP_PATH}${hash}`}
+            src={BLUEMAP_PATH}
             className="border-border h-[calc(100vh-180px)] min-h-[480px] w-full rounded-md border"
           />
         )}

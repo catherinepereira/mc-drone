@@ -40,7 +40,10 @@ interface BridgeState {
   logs: LogLine[];
   lastError: string | null;
   latencyMs: number | null;
-  memory: Memory | null;
+  // each drone's voxel memory by entity id, the brain flies several at once
+  memories: Record<number, Memory>;
+  // the drone whose memory changed last
+  memoryDrone: number | null;
 
   connect: () => void;
   takeControl: () => void;
@@ -62,6 +65,7 @@ interface BridgeState {
   saveRegion: (name: string, purpose: RegionPurpose) => void;
   deleteRegion: (id: string) => void;
   selectRegion: (id: string) => void;
+  runQueues: () => void;
   clearError: () => void;
 }
 
@@ -89,6 +93,7 @@ interface MemoryMessage {
   changes: Omit<MemoryChange, "step">[];
   snapshot?: [number, number, number, string][];
   focus?: Memory["focus"];
+  drone?: number;
 }
 
 /**
@@ -133,7 +138,8 @@ export const useBridge = create<BridgeState>((set, get) => ({
   logs: [],
   lastError: null,
   latencyMs: null,
-  memory: null,
+  memories: {},
+  memoryDrone: null,
 
   connect: () => {
     if (socket && socket.readyState <= WebSocket.OPEN) return;
@@ -220,7 +226,16 @@ export const useBridge = create<BridgeState>((set, get) => ({
           break;
         }
         case "memory":
-          set((s) => ({ memory: applyMemory(s.memory, msg) }));
+          set((s) => {
+            const drone = msg.drone ?? -1;
+            return {
+              memories: {
+                ...s.memories,
+                [drone]: applyMemory(s.memories[drone] ?? null, msg),
+              },
+              memoryDrone: drone,
+            };
+          });
           break;
         case "log":
           set((s) => ({ logs: [...s.logs, msg.entry].slice(-LOG_LIMIT) }));
@@ -259,6 +274,7 @@ export const useBridge = create<BridgeState>((set, get) => ({
   saveRegion: (name, purpose) => send({ type: "region_save", name, purpose }),
   deleteRegion: (region) => send({ type: "region_delete", region }),
   selectRegion: (region) => send({ type: "region_use", region }),
+  runQueues: () => send({ type: "run_queues" }),
   clearError: () => set({ lastError: null }),
 }));
 

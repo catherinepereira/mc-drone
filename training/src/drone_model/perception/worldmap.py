@@ -2,7 +2,7 @@
 What a scripted expert is allowed to know: its own pose plus what its camera has seen.
 Each frame's depth and semantic mask are back-projected into world points. A hit below the camera raises that
 column's known floor, a hit above it lowers the column's known ceiling, and target blocks (ore, chests, the marker,
-the pad) are remembered once seen.
+the pad) are remembered once seen. Other drones block their column for a few frames, they move.
 Nothing here reads the arena layout
 """
 
@@ -21,6 +21,15 @@ PIXEL_STRIDE = 2
 STEP_MARGIN = -0.1
 # or when its ceiling is below the drone's feet plus this, the drone is 0.4 tall
 HEAD_MARGIN = 0.5
+# frames a drone seen in a column keeps the planner out of it
+DRONE_FRAMES = 15
+# a drone this far above or below the flying height is out of the way
+DRONE_SPAN = 1.5
+
+
+def drone_mask_id(mask_ids: dict) -> int:
+    """The mask stream's id for a drone, entities come after the blocks"""
+    return mask_ids["entityBase"] + mask_ids["entities"].index("mcdrone:drone")
 
 
 def perceivable(state: dict) -> dict:
@@ -33,6 +42,11 @@ class WorldMap:
     def __init__(self, mask_ids: dict) -> None:
         names = mask_ids["blocks"]
         self.id_of = {name: i + 1 for i, name in enumerate(names)}
+        self.entity_base = mask_ids["entityBase"]
+        self.drone_id = drone_mask_id(mask_ids)
+        # columns another drone was seen in, as (frame, lowest block, highest block)
+        self.drones: dict[tuple[int, int], tuple[int, int, int]] = {}
+        self.frame = 0
         self.landmark_ids = {
             "coal_ore": self.id_of.get("minecraft:coal_ore"),
             "chest": self.id_of.get("minecraft:chest"),
@@ -68,7 +82,7 @@ class WorldMap:
     # planner interface, see expert.plan and expert.waypoint
     @property
     def boxes(self) -> list:
-        return [c for c in self.heights.keys() | self.ceilings.keys() if self.blocked(c)]
+        return [c for c in self.heights.keys() | self.ceilings.keys() | self.drones.keys() if self.blocked(c)]
 
     def ceiling(self, cell: tuple[int, int]) -> float:
         """The column's ceiling, ignored once the floor is known to reach it (the column is solid from the ground up)"""
@@ -78,7 +92,12 @@ class WorldMap:
     def blocked(self, cell: tuple[int, int]) -> bool:
         if cell == self.ignore:
             return False
-        return self.heights.get(cell, -math.inf) > self.fly_y + STEP_MARGIN or self.ceiling(cell) < self.fly_y + HEAD_MARGIN
+        return self.heights.get(cell, -math.inf) > self.fly_y + STEP_MARGIN or self.ceiling(cell) < self.fly_y + HEAD_MARGIN or self.drone_in(cell)
+
+    def drone_in(self, cell: tuple[int, int]) -> bool:
+        """Another drone was seen in this column lately, near the flying height"""
+        seen = self.drones.get(cell)
+        return seen is not None and self.frame - seen[0] < DRONE_FRAMES and seen[1] - DRONE_SPAN < self.fly_y < seen[2] + DRONE_SPAN
 
     def headroom(self, x: float, z: float) -> float:
         """Lowest known ceiling over the drone's footprint at x, z"""
@@ -150,12 +169,20 @@ class WorldMap:
 
     def update(self, state: dict, depth: np.ndarray, mask: np.ndarray, depth_max: float, pixels: np.ndarray | None = None) -> None:
         """pixels is any per-pixel value to keep with each hit in last_hits, such as the reader's ripe probability"""
+        self.frame += 1
         ids_full = mask.astype(np.int64)
         view = backproject(state, depth, depth_max, valid=ids_full != 0)
-        eye, inside, interior = view.eye, view.inside, view.interior
         ids = ids_full[np.ix_(view.rows, view.cols)][view.hit]
+        for x, y, z in view.inside[ids == self.drone_id]:
+            key = (int(x), int(z))
+            seen = self.drones.get(key)
+            lo, hi = (min(seen[1], y), max(seen[2], y)) if seen is not None and seen[0] == self.frame else (y, y)
+            self.drones[key] = (self.frame, int(lo), int(hi))
+        # entities aren't terrain
+        block = ids < self.entity_base
+        eye, inside, interior, outside, ids = view.eye, view.inside[block], view.interior[block], view.outside[block], ids[block]
         # the block, mask id, and per-pixel value of every sampled hit
-        self.last_hits = (inside, ids, pixels[np.ix_(view.rows, view.cols)][view.hit] if pixels is not None else None)
+        self.last_hits = (inside, ids, pixels[np.ix_(view.rows, view.cols)][view.hit][block] if pixels is not None else None)
 
         overhead = inside[:, 1] + 0.5 > eye[1]
         floor = inside[~overhead]
@@ -175,8 +202,8 @@ class WorldMap:
         # a ray that crossed a block on its way to a surface saw it empty, strict kinds lose votes there so a block
         # that went away (a harvested crop) stops being remembered once the drone looks again
         # a short block (a young crop) can hold both ends of the step, it was hit, not crossed
-        moved = interior & np.any(view.outside != inside, axis=1)
-        crossed, crossed_n = np.unique(view.outside[moved], axis=0, return_counts=True)
+        moved = interior & np.any(outside != inside, axis=1)
+        crossed, crossed_n = np.unique(outside[moved], axis=0, return_counts=True)
         for (x, y, z), n in zip(crossed, crossed_n):
             key = (int(x), int(y), int(z))
             self.air[key] = self.air.get(key, 0) + int(n)

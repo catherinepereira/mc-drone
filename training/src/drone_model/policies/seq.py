@@ -13,7 +13,9 @@ import numpy as np
 import torch
 from torch import nn
 
-from ..experts.tools import BUILD_PALETTE, TOOLS
+from ..experts.base import TOOLS
+from ..perception.blocks import BUILD_PALETTE
+from ..torch_utils import load_weights
 
 # block and item names the policy tells apart, everything else is "other"
 VOCAB = (
@@ -153,7 +155,7 @@ class SeqAgent:
     def __init__(self, checkpoint, mask_ids: dict, device: torch.device) -> None:
         self.device = device
         self.model = SeqToolPolicy().to(device)
-        self.model.load_state_dict(torch.load(checkpoint, map_location=device, weights_only=True)["model"])
+        load_weights(self.model, checkpoint, device)
         self.model.eval()
         self.lookup = mask_lookup(mask_ids)
         self.reset()

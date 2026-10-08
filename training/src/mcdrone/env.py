@@ -14,6 +14,8 @@ from .client import DroneClient
 from .protocol import DEFAULT_HOST, DEFAULT_PORT, TOOLS, Observation, action as make_action
 
 MAX_LOOK = 15.0
+# seconds a fleet reset may wait for the group's other drones to finish their episodes
+FLEET_WAIT = 3600.0
 STATE_DIM = 6
 MARKER_DIM = 3
 INVENTORY_SLOTS = 27
@@ -59,8 +61,11 @@ class DroneEnv(gym.Env):
         render_mode: str | None = None,
         action_pause_ms: int | None = None,
         chase_size: tuple[int, int] = (640, 360),
+        drone: int | None = None,
     ) -> None:
         super().__init__()
+        # the entity id of the drone to fly, None for the player's active drone
+        self.drone = drone
         self.host = host
         self.port = port
         self.width = width
@@ -120,7 +125,7 @@ class DroneEnv(gym.Env):
     @property
     def client(self) -> DroneClient:
         if self._client is None:
-            self._client = DroneClient(self.host, self.port, role="controller", log_dir=self.log_dir, client_name="mcdrone-env")
+            self._client = DroneClient(self.host, self.port, role="controller", log_dir=self.log_dir, client_name="mcdrone-env", drone=self.drone)
             self._client.connect()
         if not self._configured:
             extra: dict[str, Any] = {}
@@ -141,7 +146,8 @@ class DroneEnv(gym.Env):
         super().reset(seed=seed)
         task_seed = int(self.np_random.integers(0, 2**31 - 1))
         merged = {"task": self.task, **self.task_options, **(options or {})}
-        obs = self.client.reset(seed=task_seed, **merged)
+        # a fleet's reset waits for its slowest drone to finish
+        obs = self.client.reset(seed=task_seed, timeout=FLEET_WAIT if "fleet" in merged else None, **merged)
         self._last = obs
         return self._convert(obs), self._info(obs)
 

@@ -1,7 +1,7 @@
 """
 Records MP4s of a policy flying a task in the live mod: a third-person view from behind the drone (or its own camera),
 the drone camera, depth, the arena map, and stats.
-Captures at a higher resolution than training and downsamples for learned policies
+Agents see frames at the size they were trained on, the video upscales them
 """
 
 from __future__ import annotations
@@ -11,17 +11,12 @@ import subprocess
 from pathlib import Path
 
 import numpy as np
-import torch
 from mcdrone import DroneEnv
 from PIL import Image, ImageDraw, ImageFont
 
-from ..paths import CHECKPOINTS, SCHEMATICS, VIDEOS
-from ..policies.cnn import DronePolicy, to_image
-from ..policies.seq import SeqAgent
+from ..agents import Pilot, outcome
+from ..paths import CHECKPOINTS, VIDEOS
 from ..perception.reader import Reader
-from ..policies.skill import with_skill
-from ..experts.jobs import make_planner
-from ..experts.tools import make_expert
 
 CAM_W, CAM_H = 480, 360
 CHASE_W, CHASE_H = 640, 360
@@ -160,14 +155,10 @@ def main() -> None:
     parser.add_argument("--name", default=None)
     parser.add_argument("--out", type=Path, default=VIDEOS)
     args = parser.parse_args()
-    reader = Reader(args.reader) if args.perception == "reader" else None
-
-    model = None
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    if args.policy == "bc":
-        model = DronePolicy().to(device)
-        model.load_state_dict(torch.load(args.checkpoint, map_location=device, weights_only=True)["model"])
-        model.eval()
+    try:
+        pilot = Pilot(args.policy, args.task, args.checkpoint, Reader(args.reader) if args.perception == "reader" else None, args.skill)
+    except ValueError as e:
+        raise SystemExit(str(e))
     env = DroneEnv(
         task=args.task,
         tools=args.policy in ("expert", "seq") or None,
@@ -198,12 +189,7 @@ def main() -> None:
         for i in range(args.episodes):
             obs, info = env.reset(seed=args.seed + i)
             job = info["state"].get("job")
-            if args.policy == "expert":
-                # tasks with a job run the brain's planner for it, like drone_model.brain
-                planner = make_planner(job, env.client.mask_ids, reader, SCHEMATICS) if job and reader is not None else make_expert(args.task, env.client.mask_ids, reader=reader)
-                expert = with_skill(planner, args.skill)
-            if args.policy == "seq":
-                expert = SeqAgent(args.checkpoint, env.client.mask_ids, device)
+            agent = pilot.start(env.client.mask_ids, info)
             if args.policy != "expert":
                 label = f"{args.checkpoint.stem} policy, vision only"
             elif args.skill is not None:
@@ -214,23 +200,17 @@ def main() -> None:
                 label = "scripted expert, explores and maps"
             tier = f"{args.tier} drone, " if args.tier else ""
             title = f"{args.task}, {tier}{label}, episode {i + 1}"
-            terminated = truncated = False
+            # an arena can be done before its first step
+            terminated, truncated = bool(info["episode"].get("done")), False
             while True:
                 ffmpeg.stdin.write(compose(obs, info, title, font).tobytes())
                 if terminated or truncated:
                     break
-                if args.policy in ("expert", "seq"):
-                    action = expert.act(info["state"], obs)
-                else:
-                    with torch.no_grad():
-                        rgb = torch.from_numpy(np.asarray(Image.fromarray(obs["rgb"]).resize((160, 120), Image.BILINEAR)))[None].to(device)
-                        depth = torch.from_numpy(np.asarray(Image.fromarray(obs["depth"]).resize((160, 120), Image.NEAREST)))[None].to(device)
-                        action = model(to_image(rgb, depth), torch.from_numpy(obs["state"][:6])[None].to(device))[0].cpu().numpy()
-                obs, reward, terminated, truncated, info = env.step(action)
+                obs, reward, terminated, truncated, info = env.step(agent.act(info["state"], obs))
             # hold the last frame for a second so the outcome is readable
             for _ in range(FPS):
                 ffmpeg.stdin.write(compose(obs, info, title, font).tobytes())
-            summary.append("success" if info["episode"].get("success") else "out of bounds" if info["episode"].get("outOfBounds") else "timeout")
+            summary.append(outcome(info["episode"]))
             print(f"episode {i + 1}: {summary[-1]} in {info['episode']['step']} steps", flush=True)
     finally:
         env.close()

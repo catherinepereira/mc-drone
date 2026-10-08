@@ -35,11 +35,9 @@ public final class Blueprint {
 	}
 
 	public final List<Cell> cells;
-	public final List<Block> decoys;
 
-	private Blueprint(List<Cell> cells, List<Block> decoys) {
+	private Blueprint(List<Cell> cells) {
 		this.cells = cells;
-		this.decoys = decoys;
 	}
 
 	public static Blueprint random(Random rng) {
@@ -75,7 +73,7 @@ public final class Blueprint {
 				}
 			}
 		}
-		return new Blueprint(List.copyOf(cells), List.copyOf(shuffled.subList(kinds, kinds + 2)));
+		return new Blueprint(List.copyOf(cells));
 	}
 
 	private static int count(int[][] heights) {
@@ -94,15 +92,12 @@ public final class Blueprint {
 		}
 	}
 
-	/** Exactly enough of each block plus two spares, and a few stacks of two unused palette blocks, in shuffled slots */
+	/** Exactly enough of each block plus two spares, in shuffled slots */
 	public List<ItemStack> stock(Random rng, int slots) {
 		List<ItemStack> stacks = new ArrayList<>();
 		for (Block block : this.cells.stream().map(Cell::block).distinct().toList()) {
 			long n = this.cells.stream().filter(c -> c.block == block).count();
 			stacks.add(new ItemStack(block.asItem(), (int) n + 2));
-		}
-		for (Block decoy : this.decoys) {
-			stacks.add(new ItemStack(decoy.asItem(), 4 + rng.nextInt(5)));
 		}
 		return Structures.scatter(rng, stacks, slots);
 	}

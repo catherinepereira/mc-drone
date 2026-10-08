@@ -16,12 +16,12 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
-import net.fabricmc.fabric.api.client.rendering.v1.EntityRendererRegistry;
 import net.fabricmc.fabric.api.client.rendering.v1.ModelLayerRegistry;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
 import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderEvents;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.entity.EntityRenderers;
 
 public class McDroneClient implements ClientModInitializer {
 	private static final KeyMapping.Category CATEGORY = KeyMapping.Category.register(McDrone.id("main"));
@@ -29,7 +29,7 @@ public class McDroneClient implements ClientModInitializer {
 	@Override
 	public void onInitializeClient() {
 		ModelLayerRegistry.registerModelLayer(DroneRenderer.LAYER, DroneModel::createLayer);
-		EntityRendererRegistry.register(ModContent.DRONE, DroneRenderer::new);
+		EntityRenderers.register(ModContent.DRONE, DroneRenderer::new);
 
 		KeyMapping pilot = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.mcdrone.pilot", InputConstants.Type.KEYBOARD, InputConstants.KEY_V, CATEGORY));
 		KeyMapping newEpisode = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.mcdrone.new_episode", InputConstants.Type.KEYBOARD, InputConstants.KEY_N, CATEGORY));

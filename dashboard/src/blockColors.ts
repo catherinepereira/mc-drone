@@ -38,6 +38,7 @@ export function blockColor(label: string): string {
   return BLOCK_COLORS[label] ?? "var(--color-text-muted)";
 }
 
-export function shortBlock(label: string): string {
+/** A block or item id without the minecraft namespace, spaced, such as "oak planks" */
+export function shortName(label: string): string {
   return label.replace(/^minecraft:/, "").replaceAll("_", " ");
 }

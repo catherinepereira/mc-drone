@@ -49,7 +49,7 @@ Hold the tablet to select. Left click a block for the first corner, right click 
 
 Each region is the tablet selection or a saved region. Paste at is the tablet's paste point or a saved region, whose lowest corner the build's lowest corner lands on. Materials is what the drone carries, or a saved region it mines the blocks it needs from before building. That makes a three-region job: mine region A for materials, copy region B, build in region C. The drone never breaks blocks in the copy's source, and the gather region can't overlap the source or the destination.
 
-Start job runs a job now. Add to queue puts it on the active drone's queue, with the tablet selection copied in, so moving the selection later doesn't move queued work. Each drone keeps its own queue of up to 16 jobs, saved with the drone. The tablet shows the active drone's queue, where Run queue starts the first job, x removes one, and Clear queue empties it. With the brain connected, the next queued job starts when one finishes. After the last one, or after a job that stops short, the drone flies back to its home station. Send home does the same right away. The dashboard's Drones panel shows every drone's queue.
+Start job runs a job now. Add to queue puts it on the active drone's queue, with the tablet selection copied in, so moving the selection later doesn't move queued work. Each drone keeps its own queue of up to 16 jobs, saved with the drone. The tablet shows the active drone's queue, where Run queue starts the first job, x removes one, and Clear queue empties it. With the brain connected, the next queued job starts when one finishes. After the last one, or after a job that stops short, the drone flies back to its home station. Send home does the same right away. Run every drone's queue starts the first job of every idle drone, and the drones work at once, each flown by its own brain worker. A job can't share blocks with another drone's running job. The dashboard's Drones panel shows every drone's queue and the job it's on.
 
 To set one up, select a box with the tablet, name it on the job screen's bottom row, pick a purpose, and save it. Repeat for each region, then pick them on the job screen and start. Saved regions show while you hold the tablet, colored by purpose. `safe` boxes are never broken or built in by a drone. `mine` and `farm` are labels for the boxes those jobs work in. Press J to copy the selection straight away. The dashboard's Jobs and Regions panels do the same, and can save the selection as a `.schem` file.
 
@@ -65,13 +65,13 @@ A quadcopter a little under a block across, with spinning rotors, a camera pod t
 | Iron | an iron pickaxe, faster, and diamond ore drops | gray arms, white accents |
 | Diamond | a diamond pickaxe, fastest, and obsidian drops | teal arms, cyan accents |
 
-A player can own any number of drones. The tablet lists the loaded ones with their tier, charge, and home station, and the one you pick is the active drone that jobs, piloting, and the bridge use. Placing a drone makes it the active one.
+A player can own any number of drones. The tablet lists the loaded ones with their tier, charge, home station, and the job each is on, and the one you pick is the active drone that the job screen, piloting, and the HUD use. Placing a drone makes it the active one. Several drones fly at once, each with its own bridge controller, see docs/PROTOCOL.md.
 
 ## Battery and charging
 
 A drone runs on a battery, about 15 minutes of flight on a full charge. Flying draws full power, hovering in place half, and each block broken about 2 seconds of flight. A drone that hasn't moved or broken anything for 5 seconds powers down and draws nothing. Out of charge it can't fly or use tools and sinks to the ground where it is.
 
-Right click a charging station with the tablet to make it the active drone's home. A drone sitting on top of its home station charges, empty to full in about 3 minutes. A job's geofence takes in the home station when it's within reach, so the drone can fly back mid-job.
+Right click a charging station with the tablet to make it the active drone's home. Drones are solid to each other, so a station is home to one drone. A drone sitting on top of its home station charges, empty to full in about 3 minutes. A job's geofence takes in the home station when it's within reach, so the drone can fly back mid-job.
 
 The battery counts drone ticks: each pose the flying client sends is one tick, and an idle drone runs on server ticks. That keeps it running in lockstep, where server ticks are frozen. A training arena recharges the drone and keeps it from running down, so long training runs don't depend on the charge.
 
@@ -79,7 +79,7 @@ The settings are in `config/mcdrone-battery.json`, written with the defaults on 
 
 ## Web map
 
-With [BlueMap](https://modrinth.com/mod/bluemap) installed next to the mod, its web map at `http://localhost:8100` shows the saved regions as colored boxes, each drone with its tier's icon, charge, and queue, and the charging stations. The markers update every second, toggle them from the map's menu. The dashboard's Map tab embeds it. The dev client loads BlueMap 5.28. BlueMap waits for `accept-download: true` in `config/bluemap/core.conf`, which accepts Mojang's EULA and lets it download the Minecraft client jar it renders with. The client gametest's run folder is cleared on every launch, so its BlueMap settings come from `devconfig/bluemap/`: `core.conf` with the download on, and `webserver.conf`, which binds the map to `127.0.0.1`. For `runClient`, set it in `run/config/bluemap/core.conf` after the first start, then `/bluemap reload`. Without BlueMap the mod runs the same, minus the map.
+With [BlueMap](https://modrinth.com/mod/bluemap) installed next to the mod, its web map at `http://localhost:8100` shows the saved regions as colored boxes, each drone with its tier's icon, charge, and queue, and the charging stations. Drone markers move every second, as often as BlueMap moves players: the mod writes the drones' positions to `mcdrone/drones.json` in BlueMap's web root, and a small script it adds to the web app moves the markers from it. The same script glides the camera after the drone the dashboard follows. Blocks that drones and arenas change are saved and rendered again every 5 seconds, BlueMap renders from the region files. Toggle the markers from the map's menu. The dashboard's Map tab embeds it. The dev client loads BlueMap 5.28. BlueMap waits for `accept-download: true` in `config/bluemap/core.conf`, which accepts Mojang's EULA and lets it download the Minecraft client jar it renders with. The client gametest's run folder is cleared on every launch, so its BlueMap settings come from `devconfig/bluemap/`: `core.conf` with the download on, and `webserver.conf`, which binds the map to `127.0.0.1`. For `runClient`, set it in `run/config/bluemap/core.conf` after the first start, then `/bluemap reload`. Without BlueMap the mod runs the same, minus the map.
 
 ## Crafting
 
@@ -160,7 +160,7 @@ src/gametest/   client gametest
 ## Known limitations
 
 - Singleplayer only. The drone pose is client-authoritative and lockstep freezes the integrated server.
-- A player can own many drones, but one flies at a time, the active one.
+- There is one game camera, so drones flying at once take turns rendering their frames, one frame each. The window shows whichever drone rendered last. Frames are cheap, the depth and mask raycast is most of a capture, so drones flying at once share about 150 captures a second.
 - Drops follow the tier's pickaxe. Gold, diamond, emerald, and redstone ore need an iron or diamond drone, and obsidian a diamond one. Mine jobs leave out kinds the drone gets nothing from, the job screen warns about them before you start, and the brain digs around those blocks.
 - RGB capture reads the main framebuffer, so frames show whatever the game window renders at its current FOV and settings. Keep the window open and unminimized while streaming.
 - Each lockstep step waits for one rendered frame, so step rate follows FPS. Minecraft drops to 10 FPS when the window is unfocused for a while, set Video Settings, Inactivity FPS Limit to Minimized to keep full speed in the background.

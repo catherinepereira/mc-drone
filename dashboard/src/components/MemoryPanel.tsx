@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { blockColor, shortBlock } from "../blockColors";
+import { blockColor, shortName } from "../blockColors";
 import type { Memory } from "../protocol";
 import { useBridge } from "../stores/bridge";
 import { Card, Pill } from "./ui";
@@ -36,7 +36,15 @@ function viewBox(memory: Memory, cells: Map<string, string>) {
  * changes it made to that belief step by step. Scrub back to see the memory as it was at any step
  */
 export function MemoryPanel() {
-  const memory = useBridge((s) => s.memory);
+  const memories = useBridge((s) => s.memories);
+  const latestDrone = useBridge((s) => s.memoryDrone);
+  const status = useBridge((s) => s.status);
+  const [picked, setPicked] = useState<number | null>(null);
+  const shownDrone = picked != null && memories[picked] ? picked : latestDrone;
+  const memory = shownDrone != null ? memories[shownDrone] : undefined;
+  const droneIds = Object.keys(memories).map(Number);
+  const droneName = (id: number) =>
+    status?.drones?.find((d) => d.id === id)?.name ?? `drone ${id}`;
   const [step, setStep] = useState<number | null>(null);
   const [layer, setLayer] = useState<number | null>(null);
   const shown = step ?? memory?.latestStep ?? 0;
@@ -69,9 +77,27 @@ export function MemoryPanel() {
     <Card
       title="Drone memory"
       actions={
-        <Pill tone={step == null ? "accent" : "neutral"}>
-          {step == null ? "live" : "replay"}, step {shown}
-        </Pill>
+        <div className="flex items-center gap-2">
+          {droneIds.length > 1 && (
+            <select
+              className="border-border bg-card rounded-sm border px-1 text-xs"
+              value={shownDrone ?? undefined}
+              onChange={(e) => {
+                setPicked(Number(e.target.value));
+                setStep(null);
+              }}
+            >
+              {droneIds.map((id) => (
+                <option key={id} value={id}>
+                  {droneName(id)}
+                </option>
+              ))}
+            </select>
+          )}
+          <Pill tone={step == null ? "accent" : "neutral"}>
+            {step == null ? "live" : "replay"}, step {shown}
+          </Pill>
+        </div>
       }
     >
       <label className="text-text-muted flex items-center gap-2 text-xs">
@@ -128,7 +154,7 @@ export function MemoryPanel() {
                   fill={blockColor(label)}
                 >
                   <title>
-                    {shortBlock(label)} at {key.replaceAll(",", " ")}
+                    {shortName(label)} at {key.replaceAll(",", " ")}
                   </title>
                 </rect>
               );
@@ -146,7 +172,7 @@ export function MemoryPanel() {
                 className="inline-block h-2.5 w-2.5 rounded-sm"
                 style={{ background: blockColor(label) }}
               />
-              {shortBlock(label)} {n}
+              {shortName(label)} {n}
             </span>
           ))}
       </div>
@@ -158,8 +184,8 @@ export function MemoryPanel() {
             </span>
             <span className="text-text-primary">
               {c.cause} {c.cell.join(" ")}:{" "}
-              <span className="text-text-muted">{shortBlock(c.before)}</span> to{" "}
-              {shortBlock(c.after)}
+              <span className="text-text-muted">{shortName(c.before)}</span> to{" "}
+              {shortName(c.after)}
             </span>
           </li>
         ))}

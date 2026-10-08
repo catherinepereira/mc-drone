@@ -15,12 +15,13 @@ from pathlib import Path
 import numpy as np
 from mcdrone import DroneEnv
 
+from .. import labels
+from ..experts.jobs import episode_expert
+from ..experts.base import TOOLS
 from ..paths import CHECKPOINTS, DATA
-from ..experts.jobs import make_planner
 from ..perception.reader import Reader
 from ..policies.seq import state_features
 from ..policies.skill import SkillAgent, frame, goal_features
-from ..experts.tools import TOOLS, make_expert
 
 OUT = DATA / "skill"
 
@@ -53,10 +54,10 @@ def main() -> None:
     try:
         for i in range(args.episodes):
             obs, info = env.reset(seed=args.seed + i)
-            job = info["state"].get("job")
-            expert = make_planner(job, env.client.mask_ids, reader) if job else make_expert(args.task, env.client.mask_ids, reader=reader)
+            expert = episode_expert(args.task, info["state"].get("job"), env.client.mask_ids, reader)
             rows: dict[str, list] = {k: [] for k in ("rgb", "depth", "state", "goal", "move", "fire")}
-            terminated = truncated = False
+            # an arena can be done before its first step
+            terminated, truncated = bool(info["episode"].get("done")), False
             while not (terminated or truncated):
                 state = info["state"]
                 label = expert.act(state, obs)
@@ -65,7 +66,7 @@ def main() -> None:
                 if agent is not None and intent is not None and rng.random() < args.beta:
                     executed = agent.act(state, obs, intent)
                 else:
-                    executed = dict(label, move=np.clip(label["move"] + rng.normal(0.0, args.noise, size=5).astype(np.float32), -1.0, 1.0))
+                    executed = labels.with_flight_noise(label, rng, args.noise)
                 if intent is not None:
                     rgb, depth = frame(obs)
                     rows["rgb"].append(rgb)

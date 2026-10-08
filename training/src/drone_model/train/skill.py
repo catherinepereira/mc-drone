@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import time
 from pathlib import Path
 
@@ -13,6 +12,7 @@ from torch.nn import functional as F
 
 from ..paths import CHECKPOINTS, DATA
 from ..policies.skill import SkillPolicy
+from ..torch_utils import BestCheckpoint, autocast, load_weights, pick_device, split_episodes, write_report
 
 SKILL_DATA = DATA / "skill"
 FIELDS = ("rgb", "depth", "state", "goal", "move", "fire")
@@ -56,6 +56,21 @@ def losses(model, b: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
     return {"loss": move_loss + fire_loss, "move": move_loss, "fire": fire_loss, "fire_recall": recall, "fire_precision": precision}
 
 
+@torch.no_grad()
+def validate(model, val: dict[str, torch.Tensor], device: torch.device, chunk: int = 1024) -> dict[str, float]:
+    """Mean of each loss and rate over the validation steps, a chunk at a time"""
+    model.eval()
+    sums: dict[str, float] = {}
+    count = 0
+    for s in range(0, len(val["move"]), chunk):
+        with autocast(device):
+            out = losses(model, {k: v[s : s + chunk].to(device) for k, v in val.items()})
+        for k, v in out.items():
+            sums[k] = sums.get(k, 0.0) + v.item()
+        count += 1
+    return {k: v / count for k, v in sums.items()}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", type=Path, default=SKILL_DATA)
@@ -70,32 +85,29 @@ def main() -> None:
 
     torch.manual_seed(args.seed)
     rng = np.random.default_rng(args.seed)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    files = episode_files(args.data)
-    order = rng.permutation(len(files))
-    n_val = max(1, len(files) // 10)
-    train = load([files[i] for i in order[n_val:]], args.stride)
-    val = load([files[i] for i in order[:n_val]], args.stride)
+    device = pick_device()
+    train_files, val_files = split_episodes(episode_files(args.data), 0.1, rng)
+    train = load(train_files, args.stride)
+    val = load(val_files, args.stride)
     n = len(train["move"])
     fired = float(train["fire"].mean())
-    print(f"train {n} steps from {len(files) - n_val} episodes, val {len(val['move'])} steps, fire share {fired:.3f}, device {device}", flush=True)
+    print(f"train {n} steps from {len(train_files)} episodes, val {len(val['move'])} steps, fire share {fired:.3f}, device {device}", flush=True)
 
     model = SkillPolicy().to(device)
     if args.init is not None:
-        model.load_state_dict(torch.load(args.init, map_location=device, weights_only=True)["model"])
+        load_weights(model, args.init, device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=args.lr, total_steps=args.steps)
-    best = float("inf")
+    best = BestCheckpoint(args.out)
     history = []
     start = time.perf_counter()
-    args.out.parent.mkdir(parents=True, exist_ok=True)
     for step in range(1, args.steps + 1):
         model.train()
         idx = torch.from_numpy(rng.integers(0, n, size=args.batch_size))
         b = {k: v[idx].to(device, non_blocking=True) for k, v in train.items()}
         # brightness jitter, the same fields look different in caves, at dusk, and under trees
         b["rgb"] = (b["rgb"].float() * torch.empty(len(idx), 1, 1, 1, device=device).uniform_(0.7, 1.3)).clamp(0, 255).to(torch.uint8)
-        with torch.autocast(device.type, dtype=torch.bfloat16, enabled=device.type == "cuda"):
+        with autocast(device):
             out = losses(model, b)
         optimizer.zero_grad(set_to_none=True)
         out["loss"].backward()
@@ -103,31 +115,16 @@ def main() -> None:
         optimizer.step()
         scheduler.step()
         if step % 1000 == 0 or step == args.steps:
-            model.eval()
-            sums: dict[str, float] = {}
-            count = 0
-            with torch.no_grad():
-                for s in range(0, len(val["move"]), 1024):
-                    vb = {k: v[s : s + 1024].to(device) for k, v in val.items()}
-                    with torch.autocast(device.type, dtype=torch.bfloat16, enabled=device.type == "cuda"):
-                        o = losses(model, vb)
-                    for k, v in o.items():
-                        sums[k] = sums.get(k, 0.0) + v.item()
-                    count += 1
-            va = {k: v / count for k, v in sums.items()}
+            va = validate(model, val, device)
             history.append({"step": step, **va})
-            saved = ""
-            if va["loss"] < best:
-                best = va["loss"]
-                torch.save({"model": model.state_dict(), "step": step, "val": va}, args.out)
-                saved = " saved"
+            saved = best.offer(va["loss"], model=model.state_dict(), step=step, val=va)
             print(
                 f"step {step} val loss {va['loss']:.3f} (move {va['move']:.3f} fire {va['fire']:.3f}, fire recall {va['fire_recall']:.2f} "
-                f"precision {va['fire_precision']:.2f}) {time.perf_counter() - start:.0f}s{saved}",
+                f"precision {va['fire_precision']:.2f}) {time.perf_counter() - start:.0f}s{' saved' if saved else ''}",
                 flush=True,
             )
-    args.out.with_suffix(".json").write_text(json.dumps({"args": {k: str(v) for k, v in vars(args).items()}, "best_val_loss": best, "history": history}, indent=2))
-    print(f"best val loss {best:.3f}, checkpoint {args.out}")
+    write_report(args.out.with_suffix(".json"), args, best_val_loss=best.best, history=history)
+    print(f"best val loss {best.best:.3f}, checkpoint {args.out}")
 
 
 if __name__ == "__main__":

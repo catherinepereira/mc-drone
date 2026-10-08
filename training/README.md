@@ -18,6 +18,9 @@ Collection, evaluation, and videos need the game running with the mod and a worl
 src/mcdrone/                  bridge client, Gymnasium env, episode loader, schematic files
 src/drone_model/brain.py      runs jobs and publishes the memory
 src/drone_model/energy.py     learned job costs, and the battery keeper that flies home to charge
+src/drone_model/agents.py     the policies evaluation and videos fly, behind one act(state, obs)
+src/drone_model/labels.py     expert labels beside recorded episodes, and DART flight noise
+src/drone_model/torch_utils.py device, mixed precision, checkpoints, episode splits, run reports
 src/drone_model/paths.py      checkpoint, data, report, schematic, and video folders
 src/drone_model/perception/   world map from depth and mask, block reader U-Net, voxel memory
 src/drone_model/experts/      A* planner, scripted experts for every task, job planners
@@ -95,7 +98,7 @@ for sample in iter_transitions(episodes):
 
 ## Scripted experts
 
-The experts in `experts/tools.py` get the drone's own pose and its camera, nothing else. `perception/worldmap.py` back-projects every frame's depth and semantic mask into world points. A hit below the camera raises that column's known floor, a hit above it lowers the column's known ceiling, and ore, chests, the marker, and the pad are remembered once seen. A climb that stalls marks a ceiling over the drone, which is how the experts find a cave roof they haven't looked at. Until the expert has seen what it needs, it turns on the spot and then searches a grid of points inside the geofence, nearest first, from a little higher than it works. It plans around any column taller than its feet or with a ceiling below its head with A*, and travels at cruise height above the local ground, kept under any known ceiling.
+The arena experts in `experts/arena.py`, built on `experts/base.py`, get the drone's own pose and its camera, nothing else. `perception/worldmap.py` back-projects every frame's depth and semantic mask into world points. A hit below the camera raises that column's known floor, a hit above it lowers the column's known ceiling, and ore, chests, the marker, and the pad are remembered once seen. A climb that stalls marks a ceiling over the drone, which is how the experts find a cave roof they haven't looked at. Until the expert has seen what it needs, it turns on the spot and then searches a grid of points inside the geofence, nearest first, from a little higher than it works. It plans around any column taller than its feet or with a ceiling below its head with A*, and travels at cruise height above the local ground, kept under any known ceiling. Entities never count as terrain. In mask perception another drone seen near the flying height blocks its column for 15 frames, so the plan goes around it. The block reader has no drone class yet, so the brain doesn't see other drones.
 
 Each task builds on that. dig_block and mine_and_deliver mine every ore they have seen, mine_and_deliver drops coal in the chest whenever it has some and no known ore is left. chest_transfer opens the chests it finds and learns which one is stocked from what is inside. place_block aims at the pad's top face from above so hills don't block the view. When the crosshair shows the remembered block isn't there, or something keeps blocking the view, the expert drops it or climbs for a steeper look.
 
@@ -131,6 +134,8 @@ powershell -File scripts\collect_reader.ps1                                 # fr
 
 `brain.py` runs the player's jobs. Each job gets a planner from `experts/jobs.py` that sees through the block reader into a voxel memory and picks one goal at a time: a view (fly here, look there), a block to break, or a cell to place a block into.
 
+The brain flies every drone that has a job. It watches the player's drones as an observer, and when a job starts on a drone nobody flies, it starts a worker thread with its own controller connection for that drone (`DroneEnv(drone=...)`). The worker runs the drone's jobs one after another while its queue continues them, and lets the drone go after 20 seconds without a new job. Workers share the block reader and the learned battery costs. Two drones mining side by side each finished a 3x2x3 box of grass and dirt in about 400 steps, together in under 30 seconds.
+
 - Copy: surveys the source box from views around its sides and over its top, then looks up close at cells under read blocks that no view reached. The memory's read is the plan (saved as a `.schem` in `reports/reads/`), a block the drone doesn't carry loses to a carried one with a fair share of the votes. It surveys the destination, breaks what doesn't belong there top down, then places the plan bottom up, each block against a face of a block already in place, from a viewpoint with room for the camera. Running out of a block sends it back to look at the source cells it read as that block.
 - Build: the same from the named schematic in the game's `schematics/` folder.
 - Mine: surveys the region and breaks every block of the job's kinds it can see. With none in sight it digs trenches two wide every four blocks, top layer first, which leaves every block of the region with a face in a trench, and breaks what comes into view. Then it looks up close at wall blocks it hasn't seen well, and digs any block with a fair share of votes for one of the kinds.
@@ -153,6 +158,7 @@ The cell skill (`policies/skill.py`) is a learned controller for those goals. It
 ```powershell
 .venv\Scripts\python -m drone_model.brain                                      # run every job started in game or on the dashboard
 .venv\Scripts\python -m drone_model.brain --task copy_build --size 8 --perception scan --episodes 3   # evaluate on training arenas
+.venv\Scripts\python -m drone_model.brain --fleet replicate_build,harvest_crops --episodes 5          # one drone per task in a shared arena
 powershell -File scripts\dagger_skill.ps1 -Round 1                             # planner data, train, skill flies and planner labels, train
 .venv\Scripts\python -m drone_model.train.skill                                # checkpoints/skill.pt from data/skill
 .venv\Scripts\python -m drone_model.brain --task replicate_build --skill checkpoints/skill.pt

@@ -1,6 +1,8 @@
 package com.catherinepereira.mcdrone.client.task;
 
+import com.catherinepereira.mcdrone.Json;
 import com.catherinepereira.mcdrone.task.TaskKind;
+import com.catherinepereira.mcdrone.task.TrainingArenas;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -18,8 +20,6 @@ public final class TaskScorer {
 	public static final double SUCCESS_BONUS = 10.0;
 	// tool tasks reward approach only down to roughly reach distance, the rest is the tool's job
 	private static final double TOOL_STANDOFF = 3.0;
-	// matches Arena.HEIGHT, the cleared space above the floor
-	private static final int ARENA_HEIGHT = 16;
 
 	private boolean active;
 	private String episodeId;
@@ -32,6 +32,8 @@ public final class TaskScorer {
 	private double collisionPenalty;
 	private int step;
 	private int collisions;
+	// the collisions that were with another drone
+	private int droneCollisions;
 	private @Nullable Vec3 goal;
 	private double prevDist;
 	private double totalReward;
@@ -52,7 +54,7 @@ public final class TaskScorer {
 		int ox = origin.get(0).getAsInt();
 		int floor = origin.get(1).getAsInt();
 		int oz = origin.get(2).getAsInt();
-		this.bounds = new double[] {ox - radius, floor, oz - radius, ox + radius + 1, floor + ARENA_HEIGHT + 1, oz + radius + 1};
+		this.bounds = new double[] {ox - radius, floor, oz - radius, ox + radius + 1, floor + TrainingArenas.HEIGHT + 1, oz + radius + 1};
 		if (arena.has("fence")) {
 			// jobs bring their own geofence around the source and destination boxes
 			JsonArray fence = arena.getAsJsonArray("fence");
@@ -73,6 +75,7 @@ public final class TaskScorer {
 		this.collisionPenalty = collisionPenalty;
 		this.step = 0;
 		this.collisions = 0;
+		this.droneCollisions = 0;
 		this.goal = null;
 		this.totalReward = 0;
 		this.stepReward = 0;
@@ -122,7 +125,7 @@ public final class TaskScorer {
 	 * One simulated tick. isTarget tells whether a target block still stands in the client's world copy,
 	 * so shaping heads for the nearest unmined one
 	 */
-	public void update(Vec3 droneCenter, boolean collided, Predicate<BlockPos> isTarget) {
+	public void update(Vec3 droneCenter, boolean collided, boolean hitDrone, Predicate<BlockPos> isTarget) {
 		if (!this.active || this.done()) {
 			return;
 		}
@@ -131,6 +134,9 @@ public final class TaskScorer {
 		if (collided) {
 			this.collisions++;
 			reward -= this.collisionPenalty;
+			if (hitDrone) {
+				this.droneCollisions++;
+			}
 		}
 		if (!this.inBounds(droneCenter)) {
 			this.outOfBounds = true;
@@ -263,7 +269,7 @@ public final class TaskScorer {
 		Vec3 best = null;
 		if (this.arena.has("targets")) {
 			for (JsonElement el : this.arena.getAsJsonArray("targets")) {
-				BlockPos pos = blockPos(el.getAsJsonArray());
+				BlockPos pos = Json.readPos(el.getAsJsonArray());
 				Vec3 center = Vec3.atCenterOf(pos);
 				if (isTarget.test(pos) && (best == null || drone.distanceTo(center) < drone.distanceTo(best))) {
 					best = center;
@@ -274,11 +280,7 @@ public final class TaskScorer {
 	}
 
 	private @Nullable Vec3 point(String key) {
-		return this.arena.has(key) ? Vec3.atCenterOf(blockPos(this.arena.getAsJsonArray(key))) : null;
-	}
-
-	private static BlockPos blockPos(JsonArray a) {
-		return new BlockPos(a.get(0).getAsInt(), a.get(1).getAsInt(), a.get(2).getAsInt());
+		return this.arena.has(key) ? Vec3.atCenterOf(Json.readPos(this.arena.getAsJsonArray(key))) : null;
 	}
 
 	public JsonObject snapshot() {
@@ -294,6 +296,7 @@ public final class TaskScorer {
 		json.addProperty("success", this.success);
 		json.addProperty("truncated", this.truncated);
 		json.addProperty("collisions", this.collisions);
+		json.addProperty("droneCollisions", this.droneCollisions);
 		json.addProperty("outOfBounds", this.outOfBounds);
 		JsonArray m = new JsonArray();
 		for (int v : this.metrics) {

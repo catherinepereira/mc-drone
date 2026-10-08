@@ -18,7 +18,7 @@ from mcdrone import DroneEnv
 from ..paths import CHECKPOINTS, REPORTS
 from ..perception.memory import VoxelMemory
 from ..perception.reader import Reader
-from ..experts.tools import make_expert
+from ..experts.arena import make_expert
 
 EVAL_SEED = 100_000
 

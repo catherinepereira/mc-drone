@@ -2,6 +2,7 @@ package com.catherinepereira.mcdrone.client.hud;
 
 import com.catherinepereira.mcdrone.client.ClientRuntime;
 import com.catherinepereira.mcdrone.entity.DroneEntity;
+import com.catherinepereira.mcdrone.task.TaskKind;
 import com.google.gson.JsonArray;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -14,8 +15,9 @@ import net.minecraft.world.entity.Entity;
 import org.jspecify.annotations.Nullable;
 
 /**
- * The tablet's home screen: every loaded drone the player owns, with its tier, charge, and home station, then the active
- * drone's job queue. Clicking a drone makes it the active one, the buttons below set up its jobs, run its queue, or fly it
+ * The tablet's home screen: every loaded drone the player owns, with its tier, charge, home station, and the job it's on,
+ * then the active drone's job queue. Clicking a drone makes it the active one, the buttons below set up its jobs, run its
+ * queue, or fly it, and start every drone's queue at once
  */
 public final class TabletScreen extends Screen {
 	private static final int W = 300;
@@ -71,7 +73,7 @@ public final class TabletScreen extends Screen {
 		int rows = Math.max(1, Math.min(MAX_ROWS, this.drones.size()));
 		int queueRows = Math.max(1, Math.min(MAX_QUEUE_ROWS, this.queue.size()));
 		this.left = (this.width - W) / 2;
-		this.top = Math.max(10, (this.height - (rows + queueRows + 5) * ROW) / 2);
+		this.top = Math.max(10, (this.height - (rows + queueRows + 6) * ROW) / 2);
 		int y = this.top + 22;
 		for (DroneEntity drone : this.drones.subList(0, Math.min(MAX_ROWS, this.drones.size()))) {
 			this.addRenderableWidget(Button.builder(Component.literal(this.describe(drone, drone == active)), b -> {
@@ -116,6 +118,14 @@ public final class TabletScreen extends Screen {
 			this.addRenderableWidget(b);
 		}
 		this.addRenderableWidget(Button.builder(Component.literal("Close"), b -> this.onClose()).bounds(this.left + 2 * (third + 4), y, third, 20).build());
+		y += ROW;
+		Button all = Button.builder(Component.literal("Run every drone's queue"), b -> {
+			int started = this.runtime.runAllQueues();
+			this.message = started == 0 ? "No idle drone has a queued job" : started + (started == 1 ? " drone started" : " drones started");
+			this.rebuildWidgets();
+		}).bounds(this.left, y, W, 20).build();
+		all.active = this.drones.stream().anyMatch(d -> !d.queue().isEmpty());
+		this.addRenderableWidget(all);
 		this.bottom = y + ROW;
 	}
 
@@ -128,12 +138,13 @@ public final class TabletScreen extends Screen {
 		}
 	}
 
-	// "> Harvester, iron, 82%, home 10 64 -3, 2 queued" with the arrow on the active drone
+	// "> Harvester, iron, 82%, home 10 64 -3, mine_region, 2 queued" with the arrow on the active drone
 	private String describe(DroneEntity drone, boolean active) {
 		String home = drone.home() == null ? "no station" : "home " + drone.home().toShortString();
+		TaskKind job = this.runtime.jobOf(drone);
 		int queued = drone.queue().size();
 		return (active ? "> " : "") + drone.shownName() + ", " + drone.tier().id + ", " + Math.round(drone.charge() * 100) + "%, " + home
-			+ (queued > 0 ? ", " + queued + " queued" : "");
+			+ (job != null ? ", " + job.id : "") + (queued > 0 ? ", " + queued + " queued" : "");
 	}
 
 	@Override

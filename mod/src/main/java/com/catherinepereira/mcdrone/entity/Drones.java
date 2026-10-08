@@ -6,6 +6,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import org.jspecify.annotations.Nullable;
@@ -34,6 +35,25 @@ public final class Drones {
 			}
 		}
 		return owned.stream().min(Comparator.comparingDouble(d -> d.distanceToSqr(player))).orElse(null);
+	}
+
+	/** The drone a request names by entity id, or the active one for a negative id. Throws when the player doesn't own it */
+	public static @Nullable DroneEntity resolve(ServerPlayer player, int entityId) {
+		if (entityId < 0) {
+			return active(player);
+		}
+		if (player.level().getEntity(entityId) instanceof DroneEntity drone && drone.isOwnedBy(player)) {
+			return drone;
+		}
+		throw new IllegalArgumentException("drone " + entityId + " isn't one of yours or isn't loaded");
+	}
+
+	/** A loaded drone other than except whose home is the station at pos, or null */
+	public static @Nullable DroneEntity homedAt(ServerLevel level, BlockPos pos, DroneEntity except) {
+		for (DroneEntity drone : level.getEntities(ModContent.DRONE, d -> d != except && pos.equals(d.home()))) {
+			return drone;
+		}
+		return null;
 	}
 
 	public static void setActive(ServerPlayer player, DroneEntity drone) {

@@ -31,4 +31,18 @@ public final class Json {
 		}
 		return a;
 	}
+
+	/** The x, y, z that start at offset in a, so offset 3 is a box's second corner */
+	public static BlockPos readPos(JsonArray a, int offset) {
+		return new BlockPos(a.get(offset).getAsInt(), a.get(offset + 1).getAsInt(), a.get(offset + 2).getAsInt());
+	}
+
+	public static BlockPos readPos(JsonArray a) {
+		return readPos(a, 0);
+	}
+
+	/** A box's two corners as written, not sorted into min and max */
+	public static BlockPos[] readBox(JsonArray a) {
+		return new BlockPos[] {readPos(a, 0), readPos(a, 3)};
+	}
 }

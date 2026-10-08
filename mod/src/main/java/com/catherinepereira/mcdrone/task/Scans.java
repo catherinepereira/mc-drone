@@ -1,5 +1,6 @@
 package com.catherinepereira.mcdrone.task;
 
+import com.catherinepereira.mcdrone.Json;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -30,10 +31,9 @@ public final class Scans {
 				if (!(entry.getValue() instanceof JsonArray box) || box.size() != 6) {
 					continue;
 				}
-				BlockPos min = new BlockPos(box.get(0).getAsInt(), box.get(1).getAsInt(), box.get(2).getAsInt());
-				BlockPos max = new BlockPos(box.get(3).getAsInt(), box.get(4).getAsInt(), box.get(5).getAsInt());
+				BlockPos[] corners = Json.readBox(box);
 				String name = stamp + "-" + entry.getKey() + ".schem";
-				Schematic.fromWorld(level, min, max).write(dir.resolve(name));
+				Schematic.fromWorld(level, corners[0], corners[1]).write(dir.resolve(name));
 				files.addProperty(entry.getKey(), FOLDER + "/" + name);
 			}
 		} catch (IOException e) {

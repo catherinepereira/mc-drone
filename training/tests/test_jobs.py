@@ -1,6 +1,6 @@
 from drone_model.experts.jobs import BuildPlanner, base_name, box_views
 
-MASK_IDS = {"blocks": ["minecraft:stone", "minecraft:bricks"]}
+MASK_IDS = {"blocks": ["minecraft:stone", "minecraft:bricks"], "entities": ["mcdrone:drone"], "entityBase": 32768}
 JOB = {"kind": "copy", "source": [0, 1, 0, 2, 3, 2], "dest": [10, 1, 0, 12, 3, 2], "size": [3, 3, 3]}
 
 
@@ -125,7 +125,7 @@ def test_a_pocket_under_stone_gets_a_shaft_not_a_dig_through_it(tmp_path):
 
 
 def test_aim_angle_is_small_looking_straight_down_at_any_yaw():
-    from drone_model.experts.tools import aim_angle
+    from drone_model.experts.base import aim_angle
 
     for yaw in (0.0, 90.0, -137.0):
         state = {"pos": [0.5, 3.0, 0.5], "yaw": yaw, "pitch": 89.5, "camera": {"eyeHeight": 0.2}}

@@ -17,6 +17,7 @@ from torch.nn import functional as F
 
 from ..paths import CHECKPOINTS, DATA
 from ..perception.reader import CLASSES, NOT_CROP, BlockReader, state_tables
+from ..torch_utils import BestCheckpoint, autocast, pick_device, split_episodes, write_report
 
 CACHE = "reader-frames"
 FIELDS = ("rgb", "depth", "cls", "ripe")
@@ -130,26 +131,21 @@ def main() -> None:
 
     torch.manual_seed(args.seed)
     rng = np.random.default_rng(args.seed)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    episodes = load_frames(args.data)
-    order = rng.permutation(len(episodes))
-    n_val = max(1, len(episodes) // 10)
-    val = [episodes[i] for i in order[:n_val]]
-    train = [episodes[i] for i in order[n_val:]]
+    device = pick_device()
+    train, val = split_episodes(load_frames(args.data), 0.1, rng)
     print(f"train {len(train)} episodes ({sum(len(e['cls']) for e in train)} frames), val {len(val)} episodes, device {device}", flush=True)
 
     model = BlockReader().to(device)
     weights = class_weights(train, rng).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=args.lr, total_steps=args.steps)
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    best = -1.0
+    best = BestCheckpoint(args.out, higher_is_better=True)
     history = []
     start = time.perf_counter()
     for step in range(1, args.steps + 1):
         model.train()
         b = {k: v.to(device, non_blocking=True) for k, v in sample(train, args.batch_size, rng, augment=True).items()}
-        with torch.autocast(device.type, dtype=torch.bfloat16, enabled=device.type == "cuda"):
+        with autocast(device):
             logits, ripe_logits = model(b["rgb"], b["depth"].float())
             loss = F.cross_entropy(logits.float(), b["cls"].long(), weight=weights)
             crop = b["ripe"] != NOT_CROP
@@ -162,20 +158,17 @@ def main() -> None:
         if step % args.eval_every == 0 or step == args.steps:
             metrics = evaluate(model, val, device, rng)
             history.append({"step": step, "loss": loss.item(), **{k: v for k, v in metrics.items() if k != "per_class_iou"}})
-            saved = ""
-            if metrics["mean_iou"] > best:
-                best = metrics["mean_iou"]
-                torch.save({"model": model.state_dict(), "step": step, "metrics": metrics, "classes": CLASSES}, args.out)
-                saved = " saved"
+            saved = best.offer(metrics["mean_iou"], model=model.state_dict(), step=step, metrics=metrics, classes=CLASSES)
+            if saved:
+                final = metrics
             print(
                 f"step {step} loss {loss.item():.3f} pixel acc {metrics['pixel_acc']:.3f} mean IoU {metrics['mean_iou']:.3f} "
-                f"ripe acc {metrics['ripe_acc']:.3f} {time.perf_counter() - start:.0f}s{saved}",
+                f"ripe acc {metrics['ripe_acc']:.3f} {time.perf_counter() - start:.0f}s{' saved' if saved else ''}",
                 flush=True,
             )
-    final = torch.load(args.out, weights_only=True)["metrics"]
-    args.out.with_suffix(".json").write_text(json.dumps({"args": {k: str(v) for k, v in vars(args).items()}, "best": final, "history": history}, indent=2))
+    write_report(args.out.with_suffix(".json"), args, best=final, history=history)
     worst = sorted(final["per_class_iou"].items(), key=lambda kv: kv[1])[:6]
-    print(f"best mean IoU {best:.3f}, weakest classes: " + ", ".join(f"{n.split(':')[-1]} {v:.2f}" for n, v in worst))
+    print(f"best mean IoU {best.best:.3f}, weakest classes: " + ", ".join(f"{n.split(':')[-1]} {v:.2f}" for n, v in worst))
 
 
 if __name__ == "__main__":

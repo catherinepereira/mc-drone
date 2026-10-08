@@ -8,31 +8,34 @@ label whatever states the policy wanders into
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 
 import numpy as np
-import torch
 from mcdrone import DroneEnv
 
+from .. import labels
 from ..paths import CHECKPOINTS, DATA
 from ..policies.seq import SeqAgent, prev_features
-from ..experts.tools import make_expert
+from ..experts.arena import make_expert
+from ..torch_utils import pick_device, write_report
 from .seq import DAGGER_MARK, fit, load_task
 
 
 def collect_round(env: DroneEnv, task: str, checkpoint: Path, episodes: int, seed: int, beta: float, data: Path, rng: np.random.Generator) -> float:
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     successes = 0
+    agent = None
     for i in range(episodes):
         obs, info = env.reset(seed=seed + i)
         expert = make_expert(task, env.client.mask_ids)
-        agent = SeqAgent(checkpoint, env.client.mask_ids, device)
-        labels = []
-        terminated = truncated = False
+        if agent is None:
+            agent = SeqAgent(checkpoint, env.client.mask_ids, pick_device())
+        agent.reset()
+        rows = []
+        # an arena can be done before its first step
+        terminated, truncated = bool(info["episode"].get("done")), False
         while not (terminated or truncated):
             label = expert.act(info["state"], obs)
-            labels.append({"move": label["move"].tolist(), "tool": int(label["tool"]), "slot": int(label["slot"]), "transfer": label["transfer"].tolist()})
+            rows.append(labels.row(label))
             action = agent.act(info["state"], obs)
             if rng.random() < beta:
                 action = label
@@ -41,9 +44,7 @@ def collect_round(env: DroneEnv, task: str, checkpoint: Path, episodes: int, see
             obs, _, terminated, truncated, info = env.step(action)
         successes += int(bool(info["episode"].get("success")))
         episode_dir = data / task / info["episode"]["id"]
-        with open(episode_dir / "expert.jsonl", "w", encoding="utf-8") as f:
-            for label in labels:
-                f.write(json.dumps(label) + "\n")
+        labels.write(episode_dir, rows)
         (episode_dir / DAGGER_MARK).touch()
     return successes / episodes
 
@@ -76,7 +77,7 @@ def main() -> None:
         print(f"round {r + 1}: beta {beta:.2f}, success while collecting {rate:.0%}", flush=True)
         out = CHECKPOINTS / f"{args.task}-dagger{r + 1}.pt"
         run = fit(load_task(args.data, args.task), out, args.task, args.epochs, args.lr, init=checkpoint, seed=r)
-        out.with_suffix(".json").write_text(json.dumps({"round": r + 1, "beta": beta, "collect_success": rate, **run}, indent=2))
+        write_report(out.with_suffix(".json"), round=r + 1, beta=beta, collect_success=rate, **run)
         checkpoint = out
     print(f"final checkpoint {checkpoint}")
 

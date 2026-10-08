@@ -22,7 +22,9 @@ from ..paths import CHECKPOINTS, DATA
 from ..policies.seq import (
     HEIGHT, MOVE_DIM, WIDTH, SeqToolPolicy, frame_features, inventory_features, mask_lookup, prev_features, state_features,
 )
-from ..experts.tools import TOOLS
+from .. import labels as expert_labels
+from ..experts.base import TOOLS
+from ..torch_utils import BestCheckpoint, autocast, load_weights, pick_device, split_episodes, write_report
 
 CACHE = f"seq-{WIDTH}x{HEIGHT}"
 # DAgger episodes carry this file, they count even when the policy flying them failed
@@ -53,10 +55,9 @@ def load_sequence(episode, lookup: np.ndarray) -> Sequence | None:
     if (cache / "done").exists():
         # memory-mapped, the OS pages episodes in as batches use them instead of the dataset filling RAM
         return Sequence(**{k: np.load(cache / f"{k}.npy", mmap_mode="r") for k in Sequence.__dataclass_fields__})
-    labels_file = episode.path / "expert.jsonl"
-    if not labels_file.exists():
+    labels = expert_labels.read(episode.path)
+    if labels is None:
         return None
-    labels = [json.loads(line) for line in labels_file.read_text(encoding="utf-8").splitlines() if line.strip()]
     rows = [r for r in episode.steps if r["action"] is not None and r["step"] < len(labels)]
     if not rows:
         return None
@@ -153,7 +154,7 @@ def run_epoch(model, seqs, optimizer, device, batch_size, rng, train: bool) -> d
     with torch.set_grad_enabled(train):
         for start in range(0, len(order), batch_size):
             b = batch([seqs[i] for i in order[start : start + batch_size]], device)
-            with torch.autocast(device.type, dtype=torch.bfloat16, enabled=device.type == "cuda"):
+            with autocast(device):
                 out = losses(model, b, train)
             if train:
                 optimizer.zero_grad(set_to_none=True)
@@ -173,39 +174,30 @@ def fit(
     """Trains on seqs, keeping the checkpoint with the best validation loss at out_path, and returns the run's history"""
     torch.manual_seed(seed)
     rng = np.random.default_rng(seed)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # split by episode, validation never shares an episode with training
-    idx = rng.permutation(len(seqs))
-    n_val = max(1, int(len(seqs) * val_fraction))
-    val = [seqs[i] for i in idx[:n_val]]
-    train = [seqs[i] for i in idx[n_val:]]
+    device = pick_device()
+    train, val = split_episodes(seqs, val_fraction, rng)
     print(f"train {len(train)} episodes, val {len(val)} episodes, device {device}", flush=True)
 
     model = SeqToolPolicy().to(device)
     if init is not None:
-        model.load_state_dict(torch.load(init, map_location=device, weights_only=True)["model"])
+        load_weights(model, init, device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, epochs)
     history = []
-    best = float("inf")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+    best = BestCheckpoint(out_path)
     for epoch in range(1, epochs + 1):
         start = time.perf_counter()
         tr = run_epoch(model, train, optimizer, device, batch_size, rng, train=True)
         va = run_epoch(model, val, optimizer, device, batch_size, rng, train=False)
         scheduler.step()
         history.append({"epoch": epoch, "train": tr, "val": va})
-        saved = ""
-        if va["loss"] < best:
-            best = va["loss"]
-            torch.save({"model": model.state_dict(), "epoch": epoch, "val": va, "task": task}, out_path)
-            saved = " saved"
+        saved = best.offer(va["loss"], model=model.state_dict(), epoch=epoch, val=va, task=task)
         print(
             f"epoch {epoch:3d} train {tr['loss']:.3f} val {va['loss']:.3f} (move {va['move']:.3f} tool {va['tool']:.3f} slot {va['slot']:.3f}, "
-            f"place recall {va['place_recall']:.2f}, slot acc {va['slot_acc']:.2f}) {time.perf_counter() - start:.0f}s{saved}",
+            f"place recall {va['place_recall']:.2f}, slot acc {va['slot_acc']:.2f}) {time.perf_counter() - start:.0f}s{' saved' if saved else ''}",
             flush=True,
         )
-    return {"best_val_loss": best, "history": history}
+    return {"best_val_loss": best.best, "history": history}
 
 
 def main() -> None:
@@ -225,7 +217,7 @@ def main() -> None:
 
     seqs = load_task(args.data, args.task)
     run = fit(seqs, out_path, args.task, args.epochs, args.lr, args.batch_size, args.val_fraction, args.init, args.seed)
-    out_path.with_suffix(".json").write_text(json.dumps({"args": {k: str(v) for k, v in vars(args).items()}, **run}, indent=2))
+    write_report(out_path.with_suffix(".json"), args, **run)
     print(f"best val loss {run['best_val_loss']:.3f}, checkpoint {out_path}")
 
 

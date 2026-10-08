@@ -62,11 +62,15 @@ public final class TabletInput {
 			if (level.getBlockState(pos).is(ModContent.CHARGING_STATION)) {
 				if (player instanceof ServerPlayer serverPlayer) {
 					DroneEntity drone = Drones.active(serverPlayer);
-					if (drone != null) {
+					// drones are solid to each other, a station docks one
+					DroneEntity holder = drone == null ? null : Drones.homedAt(serverPlayer.level(), pos, drone);
+					if (drone != null && holder == null) {
 						drone.setHome(pos);
 					}
 					serverPlayer.sendOverlayMessage(Component.literal(
-						drone == null ? "Place a drone first" : drone.getCustomName().getString() + " charges at " + pos.toShortString()
+						drone == null ? "Place a drone first"
+							: holder != null ? holder.shownName() + " already charges at this station"
+							: drone.shownName() + " charges at " + pos.toShortString()
 					));
 				}
 				return InteractionResult.SUCCESS;

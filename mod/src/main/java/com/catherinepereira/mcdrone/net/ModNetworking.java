@@ -1,5 +1,6 @@
 package com.catherinepereira.mcdrone.net;
 
+import com.catherinepereira.mcdrone.Json;
 import com.catherinepereira.mcdrone.McDrone;
 import com.catherinepereira.mcdrone.entity.DroneEntity;
 import com.catherinepereira.mcdrone.entity.Drones;
@@ -9,10 +10,11 @@ import com.catherinepereira.mcdrone.task.Region;
 import com.catherinepereira.mcdrone.task.RegionStore;
 import com.catherinepereira.mcdrone.task.Schematic;
 import com.catherinepereira.mcdrone.tool.DroneTools;
-import java.io.IOException;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import java.io.IOException;
+import java.util.List;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
@@ -35,6 +37,7 @@ public final class ModNetworking {
 	public static void register() {
 		PayloadTypeRegistry.serverboundPlay().register(DronePosePayload.TYPE, DronePosePayload.CODEC);
 		PayloadTypeRegistry.serverboundPlay().register(ResetTaskPayload.TYPE, ResetTaskPayload.CODEC);
+		PayloadTypeRegistry.serverboundPlay().register(FleetResetPayload.TYPE, FleetResetPayload.CODEC);
 		PayloadTypeRegistry.serverboundPlay().register(SetFrozenPayload.TYPE, SetFrozenPayload.CODEC);
 		PayloadTypeRegistry.serverboundPlay().register(DroneToolPayload.TYPE, DroneToolPayload.CODEC);
 		PayloadTypeRegistry.serverboundPlay().register(ExportSchematicPayload.TYPE, ExportSchematicPayload.CODEC);
@@ -42,6 +45,7 @@ public final class ModNetworking {
 		PayloadTypeRegistry.serverboundPlay().register(RenameDronePayload.TYPE, RenameDronePayload.CODEC);
 		PayloadTypeRegistry.serverboundPlay().register(SelectDronePayload.TYPE, SelectDronePayload.CODEC);
 		PayloadTypeRegistry.serverboundPlay().register(DroneQueuePayload.TYPE, DroneQueuePayload.CODEC);
+		PayloadTypeRegistry.serverboundPlay().register(TaskEndPayload.TYPE, TaskEndPayload.CODEC);
 		PayloadTypeRegistry.clientboundPlay().register(RegionsPayload.TYPE, RegionsPayload.CODEC);
 
 		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) ->
@@ -60,11 +64,8 @@ public final class ModNetworking {
 				if (edit.get("op").getAsString().equals("remove")) {
 					result = store.remove(edit.get("id").getAsString()) ? "Region removed" : "No such region";
 				} else {
-					JsonArray box = edit.getAsJsonArray("box");
-					Region region = store.put(
-						edit.get("name").getAsString(), Region.Purpose.parse(edit.get("purpose").getAsString()),
-						new BlockPos(box.get(0).getAsInt(), box.get(1).getAsInt(), box.get(2).getAsInt()), new BlockPos(box.get(3).getAsInt(), box.get(4).getAsInt(), box.get(5).getAsInt())
-					);
+					BlockPos[] box = Json.readBox(edit.getAsJsonArray("box"));
+					Region region = store.put(edit.get("name").getAsString(), Region.Purpose.parse(edit.get("purpose").getAsString()), box[0], box[1]);
 					result = "Saved " + region.purpose().id() + " region " + region.name();
 				}
 			} catch (RuntimeException e) {
@@ -91,27 +92,12 @@ public final class ModNetworking {
 			ServerPlayer player = context.player();
 			Entity entity = player.level().getEntity(payload.entityId());
 			if (isHost(context.server(), player) && entity instanceof DroneEntity drone && drone.isOwnedBy(player)) {
-				context.responseSender().sendPacket(DroneTools.apply(player, drone, payload.seq(), payload.request()));
+				context.responseSender().sendPacket(DroneTools.apply(drone, payload.seq(), payload.request()));
 			}
 		});
 
-		ServerPlayNetworking.registerGlobalReceiver(ResetTaskPayload.TYPE, (payload, context) -> {
-			ServerPlayer player = context.player();
-			if (!isHost(context.server(), player)) {
-				context.responseSender().sendPacket(TaskReadyPayload.failed(payload.requestId(), "only the singleplayer host can reset the arena"));
-				return;
-			}
-			TaskReadyPayload reply;
-			try {
-				reply = Arena.reset(player, payload);
-			} catch (IllegalArgumentException e) {
-				reply = TaskReadyPayload.failed(payload.requestId(), e.getMessage());
-			} catch (RuntimeException e) {
-				McDrone.LOGGER.error("task reset failed", e);
-				reply = TaskReadyPayload.failed(payload.requestId(), e.toString());
-			}
-			context.responseSender().sendPacket(reply);
-		});
+		ServerPlayNetworking.registerGlobalReceiver(ResetTaskPayload.TYPE, (payload, context) -> reset(context, List.of(payload)));
+		ServerPlayNetworking.registerGlobalReceiver(FleetResetPayload.TYPE, (payload, context) -> reset(context, payload.members()));
 
 		ServerPlayNetworking.registerGlobalReceiver(ExportSchematicPayload.TYPE, (payload, context) -> {
 			ServerPlayer player = context.player();
@@ -180,6 +166,13 @@ public final class ModNetworking {
 			drone.setQueue(queue);
 		});
 
+		ServerPlayNetworking.registerGlobalReceiver(TaskEndPayload.TYPE, (payload, context) -> {
+			ServerPlayer player = context.player();
+			if (player.level().getEntity(payload.droneId()) instanceof DroneEntity drone && drone.isOwnedBy(player)) {
+				Arena.endJob(drone);
+			}
+		});
+
 		ServerPlayNetworking.registerGlobalReceiver(SelectDronePayload.TYPE, (payload, context) -> {
 			ServerPlayer player = context.player();
 			if (player.level().getEntity(payload.droneId()) instanceof DroneEntity drone && drone.isOwnedBy(player)) {
@@ -192,5 +185,23 @@ public final class ModNetworking {
 				context.server().tickRateManager().setFrozen(payload.frozen());
 			}
 		});
+	}
+
+	// builds the arena or starts the job, one answer per request, a failure answers every one of them
+	private static void reset(ServerPlayNetworking.Context context, List<ResetTaskPayload> requests) {
+		ServerPlayer player = context.player();
+		List<TaskReadyPayload> replies;
+		try {
+			if (!isHost(context.server(), player)) {
+				throw new IllegalArgumentException("only the singleplayer host can reset the arena");
+			}
+			replies = Arena.reset(player, requests);
+		} catch (IllegalArgumentException e) {
+			replies = requests.stream().map(r -> TaskReadyPayload.failed(r.requestId(), e.getMessage())).toList();
+		} catch (RuntimeException e) {
+			McDrone.LOGGER.error("task reset failed", e);
+			replies = requests.stream().map(r -> TaskReadyPayload.failed(r.requestId(), e.toString())).toList();
+		}
+		replies.forEach(context.responseSender()::sendPacket);
 	}
 }

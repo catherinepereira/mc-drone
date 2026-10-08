@@ -2,7 +2,6 @@ package com.catherinepereira.mcdrone.client;
 
 import com.catherinepereira.mcdrone.Json;
 import com.catherinepereira.mcdrone.task.BuildJob;
-import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -21,6 +20,14 @@ public final class Selection {
 	public @Nullable BlockPos cornerA;
 	public @Nullable BlockPos cornerB;
 	public @Nullable BlockPos dest;
+
+	public Selection copy() {
+		Selection copy = new Selection();
+		copy.cornerA = this.cornerA;
+		copy.cornerB = this.cornerB;
+		copy.dest = this.dest;
+		return copy;
+	}
 
 	public @Nullable BlockPos min() {
 		if (this.cornerA == null || this.cornerB == null) {
@@ -130,7 +137,6 @@ public final class Selection {
 		if (e == null || !e.isJsonArray() || e.getAsJsonArray().size() != 3) {
 			return null;
 		}
-		JsonArray a = e.getAsJsonArray();
-		return new BlockPos(a.get(0).getAsInt(), a.get(1).getAsInt(), a.get(2).getAsInt());
+		return Json.readPos(e.getAsJsonArray());
 	}
 }

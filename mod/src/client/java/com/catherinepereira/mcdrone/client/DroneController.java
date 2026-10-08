@@ -23,6 +23,7 @@ public final class DroneController {
 	private boolean piloting;
 	private DroneAction lastAction = DroneAction.ZERO;
 	private boolean lastCollided;
+	private boolean lastHitDrone;
 	// blocks per tick a drone with a flat battery sinks
 	private static final double FLAT_SINK = 0.08;
 
@@ -54,6 +55,11 @@ public final class DroneController {
 		return this.lastCollided;
 	}
 
+	/** Whether the last collision was with another drone */
+	public boolean lastHitDrone() {
+		return this.lastHitDrone;
+	}
+
 	public DroneAction lastAction() {
 		return this.lastAction;
 	}
@@ -66,6 +72,16 @@ public final class DroneController {
 		this.droneId = drone.getId();
 		this.velocity = Vec3.ZERO;
 		drone.clientControlled = true;
+	}
+
+	/** Hands the drone's position back to the server */
+	public void release() {
+		DroneEntity drone = this.drone();
+		if (drone != null) {
+			drone.clientControlled = false;
+		}
+		this.droneId = -1;
+		this.piloting = false;
 	}
 
 	/** Nearest loaded drone owned by the local player */
@@ -160,6 +176,7 @@ public final class DroneController {
 		this.velocity = new Vec3(stoppedX ? moved.x : this.velocity.x, stoppedY ? moved.y : this.velocity.y, stoppedZ ? moved.z : this.velocity.z);
 		this.lastAction = action;
 		this.lastCollided = stoppedX || stoppedY || stoppedZ;
+		this.lastHitDrone = this.lastCollided && !drone.level().getEntities(drone, drone.getBoundingBox().inflate(1.0E-3), e -> e instanceof DroneEntity).isEmpty();
 		return this.lastCollided;
 	}
 

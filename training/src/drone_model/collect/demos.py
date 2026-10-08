@@ -15,10 +15,13 @@ from pathlib import Path
 import numpy as np
 from mcdrone import DroneEnv
 
+from .. import labels
+from ..experts.jobs import episode_expert
 from ..paths import CHECKPOINTS, DATA, SCHEMATICS
-from ..experts.jobs import make_planner
 from ..perception.reader import Reader
-from ..experts.tools import make_expert
+
+# arenas whose demos come from the task's own expert even though they hand the drone a job
+ARENA_EXPERT_TASKS = ("replicate_build", "harvest_crops")
 
 
 
@@ -55,28 +58,18 @@ def main() -> None:
                 if "state" in env.streams:
                     # the block reader turns state stream ids into its labels through this table
                     (args.data / args.task / "state_names.json").write_text(json.dumps(env.client.state_names), encoding="utf-8")
-            job = info["state"].get("job")
-            # arenas that hand the drone a job run the brain's planner for it, they need the block reader
-            if job and reader is not None and args.task not in ("replicate_build", "harvest_crops"):
-                expert = make_planner(job, env.client.mask_ids, reader, SCHEMATICS)
-            else:
-                expert = make_expert(args.task, env.client.mask_ids, reader=reader)
-            labels = []
-            terminated = truncated = False
+            job = None if args.task in ARENA_EXPERT_TASKS else info["state"].get("job")
+            expert = episode_expert(args.task, job, env.client.mask_ids, reader, SCHEMATICS)
+            rows = []
+            # an arena can be done before its first step
+            terminated, truncated = bool(info["episode"].get("done")), False
             while not (terminated or truncated):
                 label = expert.act(info["state"], obs)
-                labels.append({
-                    "move": label["move"].tolist(), "tool": int(label["tool"]), "slot": int(label["slot"]), "transfer": label["transfer"].tolist(), "block": label.get("block"),
-                })
-                # noise only on flight, tools and transfers stay the expert's own
-                executed = dict(label, move=np.clip(label["move"] + rng.normal(0.0, args.noise, size=5).astype(np.float32), -1.0, 1.0))
-                obs, reward, terminated, truncated, info = env.step(executed)
+                rows.append(labels.row(label))
+                obs, reward, terminated, truncated, info = env.step(labels.with_flight_noise(label, rng, args.noise))
             successes += int(bool(info["episode"].get("success")))
-            episode_dir = args.data / args.task / info["episode"]["id"]
-            with open(episode_dir / "expert.jsonl", "w", encoding="utf-8") as f:
-                for label in labels:
-                    f.write(json.dumps(label) + "\n")
-            print(f"episode {i + 1}/{args.episodes} {'success' if info['episode'].get('success') else 'failed'} after {len(labels)} steps", flush=True)
+            labels.write(args.data / args.task / info["episode"]["id"], rows)
+            print(f"episode {i + 1}/{args.episodes} {'success' if info['episode'].get('success') else 'failed'} after {len(rows)} steps", flush=True)
     finally:
         env.close()
     print(f"expert success rate {successes / args.episodes:.2%}")

@@ -7,6 +7,9 @@ import com.catherinepereira.mcdrone.entity.DroneEntity;
 import com.catherinepereira.mcdrone.entity.DroneTier;
 import com.catherinepereira.mcdrone.task.Region;
 import com.catherinepereira.mcdrone.task.RegionStore;
+import com.flowpowered.math.vector.Vector2i;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
 import de.bluecolored.bluemap.api.BlueMapAPI;
 import de.bluecolored.bluemap.api.BlueMapMap;
 import de.bluecolored.bluemap.api.markers.ExtrudeMarker;
@@ -19,8 +22,14 @@ import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import javax.imageio.ImageIO;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.core.BlockPos;
@@ -30,18 +39,24 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * Draws the saved regions, the drones, and their charging stations on BlueMap's web map. Only loaded when BlueMap is
- * installed, see McDrone. The markers are rebuilt every second from the server's state
+ * installed, see McDrone. The markers are rebuilt every second from the server's state. BlueMap pushes marker sets to the
+ * web app every 10 seconds and players every second, so the drones' positions also go to a file in the web root every
+ * second, and a script added to the web app moves the drone markers from it, as often as BlueMap moves players.
+ * BlueMap renders from the region files, so blocks drones and arenas change are saved and rendered every few seconds
  */
 public final class BlueMapMarkers {
 	private static final String REGIONS = "mcdrone-regions";
 	private static final String DRONES = "mcdrone-drones";
 	private static final int UPDATE_TICKS = 20;
+	private static final String SCRIPT = "mcdrone/drones.js";
+	private static final String POSITIONS = "mcdrone/drones.json";
+	private static final int RENDER_TICKS = 100;
+	// region files with changed blocks, by level, written by the server thread only
+	private static final Map<ServerLevel, Set<Vector2i>> CHANGED = new HashMap<>();
+	// a drone's marker sits this far over its feet
+	private static final double MARKER_HEIGHT = 0.3;
 	// the item textures are 16 pixels, drawn at twice that on the map
 	private static final int ICON_SIZE = 32;
-	// the in-game outline colors, see ClientRuntime.REGION_COLORS
-	private static final Map<Region.Purpose, Integer> REGION_COLORS = Map.of(
-		Region.Purpose.SAFE, 0x2E9E63, Region.Purpose.MINE, 0xC98A1B, Region.Purpose.FARM, 0x7DBA3A, Region.Purpose.GENERAL, 0x8A94A6
-	);
 
 	private static volatile @Nullable BlueMapAPI api;
 
@@ -53,18 +68,44 @@ public final class BlueMapMarkers {
 			for (BlueMapMap map : enabled.getMaps()) {
 				writeIcons(map);
 			}
+			writeScript(enabled);
 			api = enabled;
 		});
 		BlueMapAPI.onDisable(disabled -> api = null);
+		MapChanges.listen((level, min, max) -> {
+			Set<Vector2i> regions = CHANGED.computeIfAbsent(level, l -> new HashSet<>());
+			for (int x = min.getX() >> 9; x <= max.getX() >> 9; x++) {
+				for (int z = min.getZ() >> 9; z <= max.getZ() >> 9; z++) {
+					regions.add(new Vector2i(x, z));
+				}
+			}
+		});
 		ServerTickEvents.END_SERVER_TICK.register(server -> {
 			BlueMapAPI current = api;
 			if (current != null && server.getTickCount() % UPDATE_TICKS == 0) {
 				update(current, server);
 			}
+			if (current != null && server.getTickCount() % RENDER_TICKS == 0 && !CHANGED.isEmpty()) {
+				renderChanges(current);
+			}
 		});
 	}
 
+	// saves the changed chunks and asks BlueMap to render their regions again, it reads the world from disk
+	private static void renderChanges(BlueMapAPI api) {
+		CHANGED.forEach((level, regions) -> {
+			level.getChunkSource().save(false);
+			api.getWorld(level).ifPresent(world -> {
+				for (BlueMapMap map : world.getMaps()) {
+					api.getRenderManager().scheduleMapUpdateTask(map, regions, true);
+				}
+			});
+		});
+		CHANGED.clear();
+	}
+
 	private static void update(BlueMapAPI api, MinecraftServer server) {
+		writePositions(api, server);
 		for (ServerLevel level : server.getAllLevels()) {
 			api.getWorld(level).ifPresent(world -> {
 				List<DroneEntity> drones = List.copyOf(level.getEntities(ModContent.DRONE, d -> true));
@@ -72,7 +113,7 @@ public final class BlueMapMarkers {
 				// regions are saved per world, not per dimension, and players mark them in the overworld
 				if (level == server.overworld()) {
 					for (Region r : RegionStore.get(server).all()) {
-						int rgb = REGION_COLORS.getOrDefault(r.purpose(), 0x8A94A6);
+						int rgb = r.purpose().color;
 						String label = r.name() + " (" + r.purpose().id() + ")";
 						regions.put("region-" + r.id(), ExtrudeMarker.builder()
 							.label(label)
@@ -101,7 +142,7 @@ public final class BlueMapMarkers {
 			set.put("drone-" + id, POIMarker.builder()
 				.label(drone.getDisplayName().getString())
 				.detail(droneDetail(drone))
-				.position(drone.getX(), drone.getY() + 0.3, drone.getZ())
+				.position(drone.getX(), drone.getY() + MARKER_HEIGHT, drone.getZ())
 				.icon(map.getAssetStorage().getAssetUrl(icon(drone.tier())), ICON_SIZE / 2, ICON_SIZE / 2)
 				.build());
 			BlockPos home = drone.home();
@@ -137,6 +178,42 @@ public final class BlueMapMarkers {
 
 	private static String icon(DroneTier tier) {
 		return "mcdrone-" + tier.id + "-drone.png";
+	}
+
+	// every drone's position by uuid, as [x, y, z] at its marker, replaced whole so the web app never reads half a file
+	private static void writePositions(BlueMapAPI api, MinecraftServer server) {
+		JsonObject positions = new JsonObject();
+		for (ServerLevel level : server.getAllLevels()) {
+			for (DroneEntity drone : level.getEntities(ModContent.DRONE, d -> true)) {
+				JsonArray pos = new JsonArray();
+				pos.add(drone.getX());
+				pos.add(drone.getY() + MARKER_HEIGHT);
+				pos.add(drone.getZ());
+				positions.add(drone.getUUID().toString(), pos);
+			}
+		}
+		Path out = api.getWebApp().getWebRoot().resolve(POSITIONS);
+		try {
+			Path next = out.resolveSibling("drones.json.next");
+			Files.writeString(next, positions.toString());
+			Files.move(next, out, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+		} catch (IOException e) {
+			McDrone.LOGGER.warn("could not write the drone positions for BlueMap", e);
+		}
+	}
+
+	private static void writeScript(BlueMapAPI api) {
+		Path out = api.getWebApp().getWebRoot().resolve(SCRIPT);
+		try (InputStream in = BlueMapMarkers.class.getResourceAsStream("/assets/mcdrone/bluemap/drones.js")) {
+			if (in == null) {
+				return;
+			}
+			Files.createDirectories(out.getParent());
+			Files.copy(in, out, StandardCopyOption.REPLACE_EXISTING);
+			api.getWebApp().registerScript(SCRIPT);
+		} catch (IOException e) {
+			McDrone.LOGGER.warn("could not add the drone script to BlueMap", e);
+		}
 	}
 
 	// the drone item textures, scaled up without smoothing, into the map's assets once per start

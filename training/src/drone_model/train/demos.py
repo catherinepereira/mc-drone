@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -11,6 +10,7 @@ import torch
 from mcdrone import list_episodes, state_vector
 from mcdrone.dataset import action_array
 
+from .. import labels as expert_labels
 from ..policies.cnn import DEPTH_MAX
 
 
@@ -34,11 +34,8 @@ def load_demos(data: Path, require_expert_labels: bool = True) -> Demos:
     rgbs, depths, states, actions, episodes = [], [], [], [], []
     usable = 0
     for i, ep in enumerate(list_episodes(data)):
-        labels_file = ep.path / "expert.jsonl"
-        labels = None
-        if labels_file.exists():
-            labels = [json.loads(line) for line in labels_file.read_text(encoding="utf-8").splitlines() if line.strip()]
-        elif require_expert_labels:
+        labels = expert_labels.read(ep.path)
+        if labels is None and require_expert_labels:
             continue
         usable += 1
         for row in ep.steps:

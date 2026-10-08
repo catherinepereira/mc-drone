@@ -10,6 +10,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
+from ..torch_utils import load_weights, pick_device
 from .blocks import BUILD_PALETTE
 
 SKY, OTHER = 0, 1
@@ -124,9 +125,9 @@ class Reader:
     """A trained BlockReader for one frame at a time, returning class indices and ripe probabilities"""
 
     def __init__(self, checkpoint, device: torch.device | None = None) -> None:
-        self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = device or pick_device()
         self.model = BlockReader().to(self.device)
-        self.model.load_state_dict(torch.load(checkpoint, map_location=self.device, weights_only=True)["model"])
+        load_weights(self.model, checkpoint, self.device)
         self.model.eval()
 
     @torch.no_grad()

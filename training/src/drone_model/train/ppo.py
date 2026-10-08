@@ -22,6 +22,7 @@ from torch import nn
 
 from ..paths import CHECKPOINTS, REPORTS
 from ..policies.cnn import DronePolicy, to_image
+from ..torch_utils import load_weights, pick_device
 
 
 
@@ -69,9 +70,9 @@ def main() -> None:
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = pick_device()
     actor = DronePolicy().to(device)
-    actor.load_state_dict(torch.load(args.init, map_location=device, weights_only=True)["model"])
+    load_weights(actor, args.init, device)
     anchor_policy = copy.deepcopy(actor).eval()
     critic = Critic(actor).to(device)
     log_std = nn.Parameter(torch.full((5,), float(np.log(args.init_std)), device=device))

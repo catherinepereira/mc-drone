@@ -126,7 +126,12 @@ export function LiveView() {
               <Row label="Step">{episode.step}</Row>
               <Row label="Distance">{fixed(episode.distance, 2)}</Row>
               <Row label="Total reward">{fixed(episode.totalReward, 2)}</Row>
-              <Row label="Collisions">{episode.collisions ?? 0}</Row>
+              <Row label="Collisions">
+                {episode.collisions ?? 0}
+                {episode.droneCollisions
+                  ? `, ${episode.droneCollisions} with drones`
+                  : ""}
+              </Row>
               <Row label="Marker">{vec(state?.marker ?? undefined, 0)}</Row>
             </>
           ) : (

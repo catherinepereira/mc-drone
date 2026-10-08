@@ -3,21 +3,17 @@
 from __future__ import annotations
 
 import argparse
-import json
 import time
 from datetime import datetime
 from pathlib import Path
 
 import numpy as np
-import torch
 from mcdrone import DroneEnv
 
+from ..agents import POLICIES, Pilot, outcome
 from ..paths import CHECKPOINTS, REPORTS
-from ..policies.cnn import DronePolicy, to_image
-from ..policies.seq import SeqAgent
 from ..perception.reader import Reader
-from ..policies.skill import with_skill
-from ..experts.tools import make_expert
+from ..torch_utils import write_report
 
 # collect.demos seeds start at 0, so eval seeds stay well clear of them
 EVAL_SEED = 100_000
@@ -27,9 +23,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", type=Path, default=CHECKPOINTS / "bc.pt")
     parser.add_argument("--episodes", type=int, default=20)
-    parser.add_argument(
-        "--policy", choices=["bc", "seq", "expert", "random"], default="bc", help="bc runs any DronePolicy checkpoint, including PPO ones, seq a SeqToolPolicy"
-    )
+    parser.add_argument("--policy", choices=POLICIES, default="bc", help="bc runs any DronePolicy checkpoint, including PPO ones, seq a SeqToolPolicy")
     parser.add_argument("--obstacles", type=int, default=8)
     parser.add_argument("--terrain", choices=["flat", "rough", "cave"], default="flat")
     parser.add_argument("--task", default="navigate_to")
@@ -37,42 +31,25 @@ def main() -> None:
     parser.add_argument("--skill", type=Path, default=None, help="a cell skill checkpoint to fly, aim, and fire for the expert's planner")
     parser.add_argument("--reader", type=Path, default=CHECKPOINTS / "reader.pt")
     args = parser.parse_args()
-    reader = Reader(args.reader) if args.perception == "reader" else None
+    try:
+        pilot = Pilot(args.policy, args.task, args.checkpoint, Reader(args.reader) if args.perception == "reader" else None, args.skill)
+    except ValueError as e:
+        raise SystemExit(str(e))
 
-    if args.task != "navigate_to" and args.policy not in ("expert", "seq"):
-        raise SystemExit("tool tasks run with --policy expert or seq")
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = None
-    if args.policy == "bc":
-        model = DronePolicy().to(device)
-        model.load_state_dict(torch.load(args.checkpoint, map_location=device, weights_only=True)["model"])
-        model.eval()
-
-    # the expert needs the marker, the learned policy never sees it
     # the expert maps the arena from depth and the semantic mask, so it gets the mask stream too
     streams = ("rgb", "depth", "mask") if args.policy in ("expert", "seq") else ("rgb", "depth")
     env = DroneEnv(task=args.task, tools=args.policy in ("expert", "seq") or None, streams=streams, action_pause_ms=0, task_options={"obstacles": args.obstacles, "terrain": args.terrain})
-    rng = np.random.default_rng(0)
     results = []
     try:
         for i in range(args.episodes):
             obs, info = env.reset(seed=EVAL_SEED + i)
-            expert = with_skill(make_expert(args.task, env.client.mask_ids, reader=reader), args.skill) if args.policy == "expert" else None
-            if args.policy == "seq":
-                expert = SeqAgent(args.checkpoint, env.client.mask_ids, device)
-            terminated = truncated = False
+            agent = pilot.start(env.client.mask_ids, info)
+            # an arena can be done before its first step
+            terminated, truncated = bool(info["episode"].get("done")), False
             steps = 0
             start = time.perf_counter()
             while not (terminated or truncated):
-                if args.policy in ("expert", "seq"):
-                    action = expert.act(info["state"], obs)
-                elif args.policy == "random":
-                    action = rng.uniform(-1, 1, size=5).astype(np.float32)
-                else:
-                    with torch.no_grad():
-                        image = to_image(torch.from_numpy(obs["rgb"])[None].to(device), torch.from_numpy(obs["depth"])[None].to(device))
-                        action = model(image, torch.from_numpy(obs["state"][:6])[None].to(device))[0].cpu().numpy()
-                obs, reward, terminated, truncated, info = env.step(action)
+                obs, reward, terminated, truncated, info = env.step(agent.act(info["state"], obs))
                 steps += 1
             results.append(
                 {
@@ -87,9 +64,8 @@ def main() -> None:
                     "seconds": time.perf_counter() - start,
                 }
             )
-            outcome = "success" if info["episode"].get("success") else "out of bounds" if info["episode"].get("outOfBounds") else "timeout"
             metrics = info["episode"].get("metrics")
-            print(f"seed {EVAL_SEED + i}: {outcome} in {steps} steps" + (f", metrics {metrics}" if metrics else ""), flush=True)
+            print(f"seed {EVAL_SEED + i}: {outcome(info['episode'])} in {steps} steps" + (f", metrics {metrics}" if metrics else ""), flush=True)
     finally:
         env.close()
 
@@ -110,8 +86,7 @@ def main() -> None:
     }
     name = args.checkpoint.stem if args.policy in ("bc", "seq") else args.policy
     out = REPORTS / "eval" / f"{args.task}-{name}-o{args.obstacles}-{args.terrain}-{datetime.now():%Y%m%d-%H%M%S}.json"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(summary, indent=2))
+    write_report(out, **summary)
     print(f"{args.policy}: success rate {summary['success_rate']:.0%} over {len(results)} episodes, report {out}")
 
 

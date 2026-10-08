@@ -3,6 +3,7 @@ package com.catherinepereira.mcdrone.tool;
 import com.catherinepereira.mcdrone.Json;
 import com.catherinepereira.mcdrone.ModContent;
 import com.catherinepereira.mcdrone.entity.DroneEntity;
+import com.catherinepereira.mcdrone.map.MapChanges;
 import com.catherinepereira.mcdrone.net.DroneSyncPayload;
 import com.catherinepereira.mcdrone.task.Arena;
 import com.catherinepereira.mcdrone.task.ArenaRecord;
@@ -17,7 +18,6 @@ import java.util.List;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.Container;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
@@ -51,11 +51,11 @@ public final class DroneTools {
 		return new ItemStack(drone.tier().pickaxe);
 	}
 
-	public static DroneSyncPayload apply(ServerPlayer player, DroneEntity drone, int seq, ToolRequest req) {
+	public static DroneSyncPayload apply(DroneEntity drone, int seq, ToolRequest req) {
 		ServerLevel level = (ServerLevel) drone.level();
 		List<BlockPos> changed = new ArrayList<>();
 		JsonArray events = new JsonArray();
-		ArenaRecord record = Arena.record(player);
+		ArenaRecord record = Arena.record(drone);
 
 		validateContainer(level, drone, events);
 		if (req.slot() < 0 || req.slot() >= DroneEntity.INVENTORY_SIZE) {
@@ -79,6 +79,9 @@ public final class DroneTools {
 			transfer(level, drone, req, events);
 		}
 
+		for (BlockPos pos : changed) {
+			MapChanges.changed(level, pos, pos);
+		}
 		Container container = DroneContainers.resolve(level, drone.openContainer);
 		long[] positions = new long[changed.size()];
 		int[] states = new int[changed.size()];
@@ -183,7 +186,8 @@ public final class DroneTools {
 					events.add(event("place_failed", "reason", "out of " + req.block()));
 					return;
 				}
-				stack = drone.inventory.getItem(slot);
+				selectFirst(drone, slot);
+				stack = drone.inventory.getItem(0);
 			}
 		}
 		BlockHitResult hit = pick(level, drone);
@@ -233,6 +237,15 @@ public final class DroneTools {
 		Identifier id = Identifier.tryParse(name);
 		Item item = id == null ? null : BuiltInRegistries.ITEM.getOptional(id).orElse(null);
 		return item instanceof BlockItem ? item : null;
+	}
+
+	/** Swaps the stack in slot into the first slot, a placed block always comes from there */
+	private static void selectFirst(DroneEntity drone, int slot) {
+		if (slot != 0) {
+			ItemStack first = drone.inventory.getItem(0);
+			drone.inventory.setItem(0, drone.inventory.getItem(slot));
+			drone.inventory.setItem(slot, first);
+		}
 	}
 
 	private static int findSlot(DroneEntity drone, Item item) {

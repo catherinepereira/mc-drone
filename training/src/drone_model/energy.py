@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import json
 import math
+import threading
 from pathlib import Path
 
-from .experts.tools import tool_action
+from .experts.base import tool_action
 from .paths import DATA
 
 SAVE = DATA / "energy.json"
@@ -51,11 +52,15 @@ def fly_home(planner, state: dict, station) -> dict:
 
 
 class EnergyModel:
-    """Charge per block of job box by job kind, and charge per block flown, as moving averages over finished jobs"""
+    """
+    Charge per block of job box by job kind, and charge per block flown, as moving averages over finished jobs.
+    Every drone the brain flies shares one, from its own thread
+    """
 
     def __init__(self, path: Path | None = SAVE) -> None:
         self.path = path
         self.learn_rate = LEARN_RATE
+        self._lock = threading.Lock()
         self.rates: dict[str, float] = {}
         self.travel: float | None = None
         if path is not None and path.exists():
@@ -75,18 +80,22 @@ class EnergyModel:
     def learn_job(self, kind: str, volume: int, spent: float) -> None:
         if volume > 0 and spent > 0:
             rate = spent / volume
-            old = self.rates.get(kind)
-            self.rates[kind] = rate if old is None else old + self.learn_rate * (rate - old)
+            with self._lock:
+                old = self.rates.get(kind)
+                self.rates[kind] = rate if old is None else old + self.learn_rate * (rate - old)
 
     def learn_travel(self, dist: float, spent: float) -> None:
         if dist >= MIN_TRIP and spent > 0:
             rate = spent / dist
-            self.travel = rate if self.travel is None else self.travel + self.learn_rate * (rate - self.travel)
+            with self._lock:
+                self.travel = rate if self.travel is None else self.travel + self.learn_rate * (rate - self.travel)
 
     def save(self) -> None:
         if self.path is not None:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            self.path.write_text(json.dumps({"rates": self.rates, "travel": self.travel}, indent=2))
+            with self._lock:
+                text = json.dumps({"rates": self.rates, "travel": self.travel}, indent=2)
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                self.path.write_text(text)
 
 
 class BatteryKeeper:

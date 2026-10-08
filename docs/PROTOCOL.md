@@ -12,7 +12,7 @@ Text frames are JSON objects with a `type` field. Binary frames are observations
 
 | type | fields | who |
 | --- | --- | --- |
-| `hello` | `role` (`controller` or `observer`), `schema`, `client` | first message from everyone |
+| `hello` | `role` (`controller` or `observer`), `schema`, `client`, optional `drone` (a drone's entity id, from `status.drones`) | first message from everyone |
 | `subscribe` | `obs`, `logs`, `metrics` (booleans) | anyone |
 | `configure` | any of `mode`, `width`, `height`, `streams`, `streamHz`, and other config fields | controller |
 | `act` | `action` | controller, realtime mode |
@@ -21,22 +21,24 @@ Text frames are JSON objects with a `type` field. Binary frames are observations
 | `record` | `on`, optional `test` | controller. With `test` the episodes go to the game folder's `mcdrone/test-recordings`, out of the training data. Recording a controller turned on stops when it releases or disconnects |
 | `pilot` | `on` | controller, moves the game camera into or out of the drone |
 | `release` | | controller, gives up control and becomes an observer |
-| `memory` | `step`, `changes`, optional `snapshot` and `focus`, see Drone memory | controller, relayed to every other client |
+| `memory` | `step`, `changes`, optional `snapshot` and `focus`, see Drone memory | controller, relayed to every other client with `drone` added |
 | `select` | any of `cornerA`, `cornerB`, `dest` as `[x, y, z]` or null | anyone, edits the copy selection |
 | `export` | `name` | anyone, saves the selected source box as `<name>.schem` in the game's `schematics` folder |
 | `region_save` | `name`, `purpose` (`general`, `safe`, `mine`, or `farm`) | anyone, saves the selection's source box as a named region, replacing one with the same name |
 | `region_delete` | `region` (a region id) | anyone |
 | `region_use` | `region` | anyone, loads the region's box into the selection's source corners |
 | `rename` | `name` (at most 32 characters, blank for the default `Drone`) | anyone, names the player's drone, shown over it as `name (owner)` |
+| `queue` | `job` (the options a job's `reset` takes), optional `drone`, `id` | anyone, adds the job to that drone's queue, the active drone's without one, answered by `queued` |
+| `run_queues` | `id` | anyone, starts the first queued job of every idle drone, answered by `queues_started` with `drones`, how many started |
 | `ping` | `id` | anyone, answered by `pong` |
 
-Only one controller at a time. A second `hello` with role `controller` gets an `error` and stays an observer.
+Each drone has at most one controller. A controller `hello` with `drone` controls that drone, without it the player's active drone. A second controller for a drone already controlled gets an `error` and stays an observer. Controller messages act on the session's own drone, so several clients can fly several drones at once. `mode` is the whole world's: lockstep freezes the server for every drone, and the world goes back to realtime once the last controller leaves. Lockstep steps of different drones take turns on the game camera, one frame each.
 
 ### Mod to client
 
 | type | fields |
 | --- | --- |
-| `welcome` | `schema`, `role`, `session`, `config`, `status`, `maskIds`, `itemIds` |
+| `welcome` | `schema`, `role`, `drone` (a controller's drone), `session`, `config`, `status`, `maskIds`, `itemIds` |
 | `status` | `mode`, `controller`, `observers`, `recording`, `recordArmed`, `piloting`, `droneId`, `inWorld`, `task`, `episode`, `selection`, `regions`, `drones` |
 | `log` | `entry` (same shape as a log line) |
 | `metrics` | `sps`, `fps`, `captureMs`, `raycastMs`, `encodeMs`, `queueDepth`, `droppedFrames`, `observers` |
@@ -62,7 +64,7 @@ Only one controller at a time. A second `hello` with role `controller` gets an `
 - `look` is degrees per tick, clamped to [-15, 15]. Positive yaw turns right, positive pitch looks down (Minecraft convention).
 - `tool` is `none`, `break`, `place`, `open`, or `close`. `break` mines the block under the crosshair within 4.5 blocks and progresses each tick it stays on, at stone-pickaxe speed, with drops going into the inventory. `place` puts a block from `slot` against the face under the crosshair. `open` opens the container under the crosshair, `close` closes it. The container closes on its own once it is more than 6 blocks from the camera.
 - `slot` (0 to 26) selects the inventory slot `place` uses.
-- `block` (optional) names the block `place` puts down instead of `slot`. With the config's `materials` set to `inventory` the drone uses the first slot holding it and fails with `out of <block>` when none does. With `unlimited` it places the block without using items.
+- `block` (optional) names the block `place` puts down instead of `slot`. With the config's `materials` set to `inventory` the drone swaps the first stack of it into slot 0 and places from there, and fails with `out of <block>` when it has none. With `unlimited` it places the block without using items.
 - `transfer` moves a stack between the drone and the open container: `{"from": "drone" | "container", "slot": i}` plus optional `toSlot` (default: first slot that fits, the way a shift-click merges) and `count` (default: the whole stack).
 - An action holds for every tick of a `step` and, in realtime mode, until the next `act`. `place`, `open`, `close`, and `transfer` fire once, on the first tick.
 
@@ -116,6 +118,7 @@ Header:
     "truncated": false,
     "outOfBounds": false,
     "collisions": 0,
+    "droneCollisions": 0,
     "metrics": [1]
   },
   "action": { "move": [1, 0, 0], "look": [0, 0], "tool": "break", "slot": 0, "transfer": null },
@@ -131,6 +134,7 @@ Header:
 - `lookingAt`, `container`, `breaking`, `bounds`, `marker`, `arena`, and `episode` are null when not applicable.
 - `job` is the drone's instruction for a copy or build job, see Jobs. Policies may read it.
 - `marker` and `arena` are privileged: the true goal and layout, for debugging and the dashboard's map. Policies and the scripted experts must not read them. Everything else is fair game, including `bounds`, the task's geofence.
+- `collisions` counts the ticks something stopped the drone, `droneCollisions` the ones where it was another drone. Drones are solid to each other.
 - `camera` lets a script back-project depth into world points with the same frustum the mod rendered.
 - `events` holds tool events since the previous observation: `break`, `break_failed`, `place`, `place_failed`, `open`, `open_failed`, `close`, `transfer`, `transfer_failed`. A tool used with a flat battery fails with reason `battery flat`.
 - `tier` is the active drone's (`copper`, `iron`, or `diamond`), its pickaxe sets how fast blocks break. `battery` is its charge from 0 to 1, its home charging station or null, whether it's docked there, and the battery settings from `config/mcdrone-battery.json`: charge per tick of flight, the share hovering draws, the charge a broken block costs, charge per tick on the station, and the reserve to keep. With `enabled` false the charge never drops.
@@ -180,7 +184,11 @@ Step `n` pairs the frame captured before action `n` with action `n`. The last st
 
 ## Tasks
 
-`reset` options for every task: `task` (default the config's `task`), `terrain` (`flat`, `rough`, or `cave`), `radius` (arena half-width, default 12), `obstacles` (pillars, default 0), `targets` (dig_block 1, mine_and_deliver 3), `size` (structure or deposit side for the arenas below that build one, 3 to 16, default 5), `perception` (`vision` or `scan`, default the config's `perception`, see Perception), `maxSteps`.
+`reset` options for every task: `task` (default the config's `task`), `terrain` (`flat`, `rough`, or `cave`), `radius` (arena half-width, default 12), `obstacles` (pillars, default 0), `targets` (dig_block 1, mine_and_deliver 3), `size` (structure or deposit side for the arenas below that build one, 3 to 16, default 5), `perception` (`vision` or `scan`, default the config's `perception`, see Perception), `maxSteps`, `fleet` (see Fleets).
+
+### Fleets
+
+Several drones can share one training arena, each with its own task. Each drone's controller sends its own `reset` with `fleet: { "group", "size", "member" }`: every reset of a group names the same `group` and `size`, and `member` (0 to size - 1) orders them. The mod holds the resets until the whole group has asked, then the server builds one arena with every member's sites and spawn, laid out by member 0's seed, `terrain`, `obstacles`, and origin, with the radius grown by the square root of the size. Each controller gets its own first frame. A drone that finishes early waits in its next `reset` until the others finish theirs, so every arena of a fleet starts together. A fleet takes training tasks only, and up to 8 drones. A group fails when one of its drones' controllers leaves before it fills up. Recordings carry the `fleet` in their meta.
 
 ### Arena
 
@@ -226,7 +234,9 @@ Copy and build metrics are matching destination cells, non-air target blocks, an
 
 ### Queues
 
-Each drone keeps a queue of jobs, saved with it. `status.drones` lists the player's loaded drones as `{ "id", "name", "tier", "active", "pos", "charge", "battery", "home", "docked", "queue" }`, where `battery` is whether the battery is enabled and `queue` holds each job's `reset` options plus a `label` such as `mine coal_ore in quarry`. The status goes out again whenever a drone's entry changes, checked once a second. With a controller connected, the mod starts the next queued job when one succeeds, and sends the drone home after the last one or after a job that fails.
+Each drone keeps a queue of jobs, saved with it. `status.drones` lists the player's loaded drones as `{ "id", "name", "tier", "active", "pos", "charge", "battery", "home", "docked", "queue", "controller", "episode" }`, where `battery` is whether the battery is enabled, `queue` holds each job's `reset` options plus a `label` such as `mine coal_ore in quarry`, `controller` is the client flying the drone or null, and `episode` is `{ "id", "task", "done", "success" }` for the drone's latest episode or null. The status goes out again whenever a drone's entry changes, checked once a second. While a controller flies a drone, the mod starts the drone's next queued job when one succeeds, and sends it home after the last one or after a job that fails. `run_queues`, and Run every drone's queue on the tablet, start every idle drone's first queued job at once.
+
+Drones work at once. A job can't share a block with another drone's running job, its `reset` fails naming the drone that works there, and a drone's boxes are free again once its job ends. `state.droneId` says which drone a frame is from. Drones are solid to each other, the brain's map keeps it out of columns where its camera saw another drone lately, see the training README.
 
 ### Perception
 
@@ -261,7 +271,7 @@ Schematics are Sponge Schematic files (`.schem`), the format WorldEdit uses. The
 - The reference build stands on a 3x3 cyan concrete base, the build site is a 3x3 lime concrete base at least 9 blocks away. Both sit level at the highest ground under them.
 - A build is 3 to 10 blocks over the 3x3 footprint and up to 3 tall. Every block rests on the base or another block, and the center column always has an open side so every block can be seen.
 - Blocks come from a 10-block palette: oak, spruce, and birch planks, cobblestone, bricks, sandstone, white, red, and blue wool, and terracotta. Each build uses 2 to 4 of them.
-- The drone starts with exactly the blocks the build needs plus 2 spares of each, and a stack each of 2 unused palette blocks, in shuffled slots.
+- The drone starts with exactly the blocks the build needs plus 2 spares of each, in shuffled slots.
 - The copy keeps the reference's orientation. Success needs every cell to match and nothing else above the site.
 - `arena` adds `referenceBase` and `buildBase` (center blocks) and `blueprint` (`[{ "offset": [dx, dy, dz], "block": "minecraft:bricks" }]`), all privileged.
 - `state.job` is a copy job from the 3x3x3 box above the cyan base to the one above the lime base, the same instruction a player's copy job gives.
@@ -270,6 +280,6 @@ Schematics are Sponge Schematic files (`.schem`), the format WorldEdit uses. The
 
 - Structures are column heights over a `size` x `size` footprint, up to two thirds of `size` tall (at least 3), from 2 to 4 palette blocks. Every block has a face in the open: a column two or more tall always has an empty neighbor or the footprint edge beside it.
 - Each sits on a concrete base levelled to the highest ground under it, cyan for a copy source and lime for the site. The arena radius grows to fit, at least `2 * size + 8`.
-- copy_build and schematic_build stock the drone like replicate_build, without the decoys. schematic_build writes the structure to `schematics/arena-<seed>.schem` and gives a build job for it.
+- copy_build and schematic_build stock the drone like replicate_build. schematic_build writes the structure to `schematics/arena-<seed>.schem` and gives a build job for it.
 - mine_deposit is a `size` x `size` stone box, `size / 2 + 1` deep (at least 3), on a stone base, with coal ore in about one cell in fifteen. About a third of the ore is on the surface, the rest buried.
 - gather_build adds a stone deposit holding every block the copy needs plus one spare of each, about a third of them on its surface. The copy job carries it as `gather`, the box the drone may also break in. The source structure stays out of the job's boxes, so the server refuses any break there. The drone starts with nothing.

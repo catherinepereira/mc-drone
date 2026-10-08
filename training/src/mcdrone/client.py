@@ -22,7 +22,8 @@ class BridgeError(RuntimeError):
 class DroneClient:
     """
     Talks to the mod over ws://127.0.0.1:8318/ws.
-    One controller at a time, connect as an observer to only watch
+    Each drone has at most one controller. A controller that names a drone by entity id controls that one, without one
+    the player's active drone. Connect as an observer to only watch
     """
 
     def __init__(
@@ -33,12 +34,15 @@ class DroneClient:
         timeout: float = 30.0,
         log_dir: Path | None = None,
         client_name: str = "mcdrone-py",
+        drone: int | None = None,
     ) -> None:
         self.url = f"ws://{host}:{port}/ws"
         self.http = f"http://{host}:{port}"
         self.requested_role = role
         self.timeout = timeout
         self.client_name = client_name
+        # the entity id of the drone this controls, filled in by the welcome
+        self.drone = drone
         self.log = JsonlLogger(log_dir)
         self.role: str | None = None
         self.config: dict[str, Any] = {}
@@ -83,16 +87,20 @@ class DroneClient:
     def connect(self) -> None:
         # the mod rejects browser origins, a script sends none
         self._ws = connect(self.url, open_timeout=self.timeout, max_size=None, origin=None, proxy=None, legacy=True)
-        self._send({"type": "hello", "role": self.requested_role, "schema": SCHEMA, "client": self.client_name})
+        hello: dict[str, Any] = {"type": "hello", "role": self.requested_role, "schema": SCHEMA, "client": self.client_name}
+        if self.drone is not None:
+            hello["drone"] = self.drone
+        self._send(hello)
         welcome = self._wait_text("welcome")
         self.role = welcome["role"]
+        self.drone = welcome.get("drone", self.drone)
         self.config = welcome["config"]
         self.status = welcome["status"]
         self.mask_ids = welcome["maskIds"]
         self.item_ids = welcome.get("itemIds", [])
         self.log.info("bridge.connected", url=self.url, role=self.role)
         if self.requested_role == "controller" and self.role != "controller":
-            raise BridgeError("another client holds the controller role")
+            raise BridgeError("another client controls that drone")
 
     def close(self) -> None:
         if self._ws is not None:
@@ -119,11 +127,15 @@ class DroneClient:
     def set_mode(self, mode: str) -> None:
         self.configure(mode=mode)
 
-    def reset(self, seed: int | None = None, **options: Any) -> Observation:
-        """options: task (navigate_to, dig_block, place_block, chest_transfer, mine_and_deliver, replicate_build), radius, obstacles, targets, maxSteps"""
+    def reset(self, seed: int | None = None, timeout: float | None = None, **options: Any) -> Observation:
+        """
+        options: task (navigate_to, dig_block, place_block, chest_transfer, mine_and_deliver, replicate_build), radius, obstacles, targets, maxSteps,
+        and fleet, {"group", "size", "member"}, to share one arena with the other drones of the group.
+        A fleet reset answers once every drone of the group has asked, timeout covers that wait
+        """
         msg_id = next(self._ids)
         self._send({"type": "reset", "id": msg_id, "seed": seed, "options": options})
-        obs = self._wait_obs(msg_id)
+        obs = self._wait_obs(msg_id, timeout)
         self.log.episode = (obs.episode or {}).get("id")
         self.log.info("task.reset", seed=seed, options=options)
         return obs
@@ -142,6 +154,21 @@ class DroneClient:
         """test sends episodes to the game's test-recordings folder, out of the training data"""
         self._send({"type": "record", "on": on, "test": test})
         self.wait_status(lambda s: s.get("recordArmed") == on)
+
+    def queue_job(self, job: dict[str, Any], drone: int | None = None) -> None:
+        """Adds a job, the options a reset takes, to a drone's queue, the active drone's without one. Any role may"""
+        msg_id = next(self._ids)
+        msg: dict[str, Any] = {"type": "queue", "id": msg_id, "job": job}
+        if drone is not None:
+            msg["drone"] = drone
+        self._send(msg)
+        self._wait_text("queued", reply_to=msg_id)
+
+    def run_queues(self) -> int:
+        """Starts the first queued job of every idle drone, returning how many started. Any role may"""
+        msg_id = next(self._ids)
+        self._send({"type": "run_queues", "id": msg_id})
+        return self._wait_text("queues_started", reply_to=msg_id)["drones"]
 
     def pilot(self, on: bool) -> None:
         self._send({"type": "pilot", "on": on})
@@ -216,8 +243,8 @@ class DroneClient:
             elif msg.get("type") == "error":
                 raise BridgeError(msg.get("message", "unknown error"))
 
-    def _wait_obs(self, msg_id: int) -> Observation:
-        deadline = time.monotonic() + self.timeout
+    def _wait_obs(self, msg_id: int, timeout: float | None = None) -> Observation:
+        deadline = time.monotonic() + (timeout or self.timeout)
         while True:
             msg = self._recv(deadline)
             if isinstance(msg, Observation):
