@@ -10,13 +10,12 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.Mob;
-import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.phys.AABB;
 import org.jspecify.annotations.Nullable;
 
 /**
- * Fly over every patrol cell of a region, rounds times, and with hunt set kill the hostile mobs in it.
- * The drone is told the region and its cells. It finds mobs with its camera.
+ * Fly over every patrol cell of a region, rounds times, and with hunt set kill its prey in it, hostile mobs unless told otherwise.
+ * The drone is told the region, its cells, and the prey. It finds mobs with its camera.
  * The client scores the rounds from the drone's pose, the server counts the mobs
  */
 public final class PatrolJob implements DroneJob {
@@ -30,22 +29,24 @@ public final class PatrolJob implements DroneJob {
 	public final BlockPos max;
 	public final int rounds;
 	public final boolean hunt;
-	// a training arena's mobs, the ones it counts. A player's job counts every hostile mob in the region
+	public final Prey prey;
+	// a training arena's prey, the mobs it counts. A player's job counts every mob of its prey in the region
 	private final @Nullable List<UUID> quarry;
-	private final int hostilesAtStart;
+	private final int preyAtStart;
 	public int kills;
 
-	private PatrolJob(BlockPos min, BlockPos max, int rounds, boolean hunt, @Nullable List<UUID> quarry, int hostilesAtStart) {
+	private PatrolJob(BlockPos min, BlockPos max, int rounds, boolean hunt, Prey prey, @Nullable List<UUID> quarry, int preyAtStart) {
 		this.min = min;
 		this.max = max;
 		this.rounds = rounds;
 		this.hunt = hunt;
+		this.prey = prey;
 		this.quarry = quarry;
-		this.hostilesAtStart = hostilesAtStart;
+		this.preyAtStart = preyAtStart;
 	}
 
 	/** A player's patrol, or with hunt their guard job. rounds is the subject, blank for one */
-	public static PatrolJob start(ServerLevel level, BlockPos a, BlockPos b, String rounds, boolean hunt) {
+	public static PatrolJob start(ServerLevel level, BlockPos a, BlockPos b, String rounds, boolean hunt, Prey prey) {
 		BlockPos min = BlockPos.min(a, b);
 		BlockPos max = BlockPos.max(a, b);
 		DroneJob.checkSize(max.subtract(min).offset(1, 1, 1), MAX_SIDE, "patrol region");
@@ -58,12 +59,12 @@ public final class PatrolJob implements DroneJob {
 		if (n < 1 || n > MAX_ROUNDS) {
 			throw new IllegalArgumentException("a patrol runs 1 to " + MAX_ROUNDS + " rounds");
 		}
-		return new PatrolJob(min, max, n, hunt, null, hunt ? hostilesIn(level, min, max) : 0);
+		return new PatrolJob(min, max, n, hunt, prey, null, hunt ? preyIn(level, min, max, prey) : 0);
 	}
 
-	/** A training arena's patrol over its floor, and with mobs a hunt for them with no rounds to fly */
-	static PatrolJob arena(BlockPos min, BlockPos max, @Nullable List<UUID> mobs) {
-		return mobs == null ? new PatrolJob(min, max, 1, false, null, 0) : new PatrolJob(min, max, 0, true, List.copyOf(mobs), mobs.size());
+	/** A training arena's patrol over its floor, and with quarry a hunt for those mobs, its prey, with no rounds to fly */
+	static PatrolJob arena(BlockPos min, BlockPos max, Prey prey, @Nullable List<UUID> quarry) {
+		return quarry == null ? new PatrolJob(min, max, 1, false, prey, null, 0) : new PatrolJob(min, max, 0, true, prey, List.copyOf(quarry), quarry.size());
 	}
 
 	/** The patrol cells' centers as x, z, evenly spread over the region */
@@ -81,7 +82,7 @@ public final class PatrolJob implements DroneJob {
 		return out;
 	}
 
-	private int hostilesLeft(ServerLevel level) {
+	private int preyLeft(ServerLevel level) {
 		if (this.quarry != null) {
 			int left = 0;
 			for (UUID id : this.quarry) {
@@ -90,21 +91,27 @@ public final class PatrolJob implements DroneJob {
 			}
 			return left;
 		}
-		return hostilesIn(level, this.min, this.max);
+		return preyIn(level, this.min, this.max, this.prey);
 	}
 
-	private static int hostilesIn(ServerLevel level, BlockPos min, BlockPos max) {
-		return level.getEntitiesOfClass(Mob.class, box(min, max), m -> m instanceof Enemy && m.isAlive()).size();
+	private static int preyIn(ServerLevel level, BlockPos min, BlockPos max, Prey prey) {
+		return level.getEntitiesOfClass(Mob.class, box(min, max), prey::matches).size();
 	}
 
 	private static AABB box(BlockPos min, BlockPos max) {
 		return new AABB(min.getX(), min.getY(), min.getZ(), max.getX() + 1, max.getY() + 1, max.getZ() + 1);
 	}
 
-	/** Hostile mobs left, mobs the drone killed, hostile mobs at the start, all 0 without hunt */
+	/** Prey left, mobs the drone killed, prey at the start, all 0 without hunt */
 	@Override
 	public int[] score(ServerLevel level) {
-		return this.hunt ? new int[] {this.hostilesLeft(level), this.kills, this.hostilesAtStart} : new int[] {0, 0, 0};
+		return this.hunt ? new int[] {this.preyLeft(level), this.kills, this.preyAtStart} : new int[] {0, 0, 0};
+	}
+
+	/** A hunt's prey inside its region, a plain patrol attacks nothing */
+	@Override
+	public boolean mayAttack(Entity entity) {
+		return this.hunt && this.prey.matches(entity) && box(this.min, this.max).contains(entity.position());
 	}
 
 	@Override
@@ -129,6 +136,9 @@ public final class PatrolJob implements DroneJob {
 		json.add("region", Json.box(this.min, this.max));
 		json.addProperty("rounds", this.rounds);
 		json.addProperty("hunt", this.hunt);
+		if (this.hunt) {
+			json.add("prey", this.prey.toJson());
+		}
 		JsonArray cells = new JsonArray();
 		for (double[] c : cells(this.min.getX(), this.min.getZ(), this.max.getX(), this.max.getZ())) {
 			JsonArray cell = new JsonArray();

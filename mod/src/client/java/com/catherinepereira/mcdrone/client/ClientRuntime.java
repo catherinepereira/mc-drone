@@ -109,7 +109,6 @@ public final class ClientRuntime {
 		String session = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"));
 		this.log = new DroneLog(logs != null ? Path.of(logs) : gameDir.resolve("mcdrone").resolve("logs"), session, this.config);
 		this.recorder = new Recorder(data != null ? Path.of(data) : gameDir.resolve("mcdrone").resolve("data"), gameDir.resolve("mcdrone").resolve("test-recordings"), this.log);
-		this.log.addListener(this.recorder::appendLog);
 		this.capture = new CaptureService(this, mc);
 		this.active = this.newRun();
 		this.bridge = new BridgeServer(this);
@@ -741,8 +740,17 @@ public final class ClientRuntime {
 		this.checkFinished(run);
 		this.afterSync(run, seq, () -> {
 			long pause = run.tools.hasActionEvents() ? this.config.actionPauseMs : 0;
-			this.runAfter(pause, () -> this.capture.request(run, obs -> this.broadcastObs(run, obs, session, replyId)));
+			this.runAfter(pause, () -> this.capture.request(run, obs -> {
+				run.terminalSent = !run.task.active();
+				this.broadcastObs(run, obs, session, replyId);
+			}));
 		});
+	}
+
+	/** The end frame of an episode that finished after the last step's frame went out, as the answer to the next step */
+	void sendTerminal(DroneRun run, Session session, @Nullable Integer replyId) {
+		run.terminalSent = true;
+		this.capture.request(run, obs -> this.broadcastObs(run, obs, session, replyId));
 	}
 
 	/**
@@ -756,6 +764,7 @@ public final class ClientRuntime {
 		int lastSeq = -1;
 		for (int i = 0; i < ticks; i++) {
 			boolean collided = run.controller.simulate(action);
+			run.task.turn(run.controller.yawRate(), run.controller.pitchRate());
 			this.metrics.simStep();
 			run.controller.sendPose();
 			ToolRequest request = i == 0 ? action.tools() : action.tools().continued();
@@ -772,7 +781,9 @@ public final class ClientRuntime {
 					Entity target = this.mc.level.getEntity(run.task.followTarget());
 					run.task.follow(drone.getBoundingBox().getCenter(), target == null ? null : target.getBoundingBox().getCenter());
 				}
-				if (run.task.active() && run.task.kind() == TaskKind.RETURN_HOME && drone.docked()) {
+				// docking is checked every step, flight steps don't wait on the server's metrics
+				boolean docked = run.task.kind() == TaskKind.RETURN_HOME ? drone.docked() : run.task.kind() == TaskKind.DOCK_STATION && drone.dockedOn(run.task.dockStation());
+				if (run.task.active() && docked) {
 					run.task.complete();
 				}
 			}
@@ -826,7 +837,13 @@ public final class ClientRuntime {
 		}
 		run.tools.update(sync);
 		for (var e : JsonParser.parseString(sync.events()).getAsJsonArray()) {
-			this.log.info("tool." + e.getAsJsonObject().get("type").getAsString(), e.getAsJsonObject());
+			String type = e.getAsJsonObject().get("type").getAsString();
+			// a beam held with nothing to lock on fails every tick, keep those out of the info log
+			if (type.equals("attack_failed")) {
+				this.log.debug("tool." + type, e.getAsJsonObject());
+			} else {
+				this.log.info("tool." + type, e.getAsJsonObject());
+			}
 		}
 		boolean wasDone = run.task.done();
 		run.task.applyMetrics(sync.metrics());

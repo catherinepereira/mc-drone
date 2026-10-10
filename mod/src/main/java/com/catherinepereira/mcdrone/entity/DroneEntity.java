@@ -219,11 +219,15 @@ public class DroneEntity extends LivingEntity implements ItemSupplier {
 
 	/** On its station, where it charges */
 	public boolean docked() {
-		BlockPos home = this.home();
-		if (home == null || !this.level().getBlockState(home).is(ModContent.CHARGING_STATION)) {
+		return this.dockedOn(this.home());
+	}
+
+	/** Resting on top of the charging station at station */
+	public boolean dockedOn(@Nullable BlockPos station) {
+		if (station == null || !this.level().getBlockState(station).is(ModContent.CHARGING_STATION)) {
 			return false;
 		}
-		Vec3 top = Vec3.atBottomCenterOf(home.above());
+		Vec3 top = Vec3.atBottomCenterOf(station.above());
 		return Math.abs(this.getX() - top.x) < 0.6 && Math.abs(this.getZ() - top.z) < 0.6 && this.getY() >= top.y - 0.1 && this.getY() <= top.y + DOCK_REACH;
 	}
 

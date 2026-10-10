@@ -139,14 +139,6 @@ public final class Recorder {
 		}
 	}
 
-	/** Every open episode gets the line, a log line doesn't say which drone it's about */
-	public void appendLog(JsonObject line) {
-		String text = line.toString();
-		for (Episode ep : this.episodes.values()) {
-			this.io.execute(() -> ep.writeLog(text));
-		}
-	}
-
 	private void writeStep(Episode ep, Observation frame, @Nullable DroneAction action, @Nullable Observation next) {
 		int n = ep.steps++;
 		JsonObject row = new JsonObject();
@@ -185,7 +177,6 @@ public final class Recorder {
 		int droppedFrames;
 		double totalReward;
 		private BufferedWriter stepsOut;
-		private BufferedWriter logOut;
 
 		Episode(Path dir, JsonObject meta) {
 			this.dir = dir;
@@ -199,7 +190,6 @@ public final class Recorder {
 				Files.createDirectories(this.dir.resolve("mask"));
 				Files.createDirectories(this.dir.resolve("state"));
 				this.stepsOut = Files.newBufferedWriter(this.dir.resolve("steps.jsonl"), StandardCharsets.UTF_8);
-				this.logOut = Files.newBufferedWriter(this.dir.resolve("log.jsonl"), StandardCharsets.UTF_8);
 				this.writeMeta();
 			} catch (IOException e) {
 				ClientRuntime.LOGGER.error("could not open episode {}", this.dir, e);
@@ -236,27 +226,11 @@ public final class Recorder {
 			}
 		}
 
-		void writeLog(String line) {
-			if (this.logOut == null) {
-				return;
-			}
-			try {
-				this.logOut.write(line);
-				this.logOut.newLine();
-				this.logOut.flush();
-			} catch (IOException e) {
-				ClientRuntime.LOGGER.warn("episode log write failed", e);
-			}
-		}
-
 		void close() {
 			try {
 				this.writeMeta();
 				if (this.stepsOut != null) {
 					this.stepsOut.close();
-				}
-				if (this.logOut != null) {
-					this.logOut.close();
 				}
 			} catch (IOException e) {
 				ClientRuntime.LOGGER.error("could not close episode {}", this.dir, e);

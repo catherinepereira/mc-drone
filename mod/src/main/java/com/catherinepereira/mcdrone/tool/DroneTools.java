@@ -26,7 +26,7 @@ import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.LivingEntity;
-import net.minecraft.world.entity.monster.Enemy;
+import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.item.BlockItem;
@@ -178,9 +178,9 @@ public final class DroneTools {
 	}
 
 	/**
-	 * The guardian's beam. Held on a hostile mob under the crosshair it locks on, and stays locked while the mob is alive,
+	 * The guardian's beam. Held on a mob under the crosshair it locks on, and stays locked while the mob is alive,
 	 * in range, and in sight, wherever the crosshair goes. Every BEAM_CHARGE drone ticks it deals the tier's sword damage.
-	 * Only hostile mobs, so a drone leaves animals, villagers, and players alone
+	 * On a job it only locks on to the job's prey, see DroneJob.mayAttack, flown by hand any mob. Never players or drones
 	 */
 	private static void attack(ServerLevel level, DroneEntity drone, JsonArray events, @Nullable ArenaRecord record) {
 		LivingEntity target = level.getEntity(drone.beamTarget()) instanceof LivingEntity locked && inSight(level, drone, locked) ? locked : null;
@@ -191,9 +191,9 @@ public final class DroneTools {
 				events.add(event("attack_failed", "reason", "nothing in range"));
 				return;
 			}
-			if (!(target instanceof Enemy)) {
+			if (record != null && record.job != null ? !record.job.mayAttack(target) : !(target instanceof Mob)) {
 				drone.setBeam(-1, 0);
-				JsonObject e = event("attack_failed", "reason", "not hostile");
+				JsonObject e = event("attack_failed", "reason", "not a target");
 				e.addProperty("entity", BuiltInRegistries.ENTITY_TYPE.getKey(target.getType()).toString());
 				events.add(e);
 				return;
@@ -238,7 +238,7 @@ public final class DroneTools {
 		}
 		LivingEntity best = null;
 		double bestDist = Double.MAX_VALUE;
-		for (LivingEntity mob : level.getEntitiesOfClass(LivingEntity.class, new AABB(eye, end).inflate(1.0), m -> m.isAlive() && !(m instanceof Player))) {
+		for (LivingEntity mob : level.getEntitiesOfClass(LivingEntity.class, new AABB(eye, end).inflate(1.0), m -> m.isAlive() && !(m instanceof Player) && !(m instanceof DroneEntity))) {
 			Optional<Vec3> hit = mob.getBoundingBox().inflate(mob.getPickRadius() + PICK_SLACK).clip(eye, end);
 			if (hit.isPresent() && eye.distanceTo(hit.get()) < bestDist) {
 				best = mob;

@@ -4,7 +4,7 @@ import numpy as np
 import torch
 from PIL import Image
 
-from drone_model.experts.navigate import expert_action
+from drone_model.scripted.navigate import expert_action
 from drone_model.framework.collect import from_recordings
 from drone_model.framework.data import load_steps
 from drone_model.policies.navigate import ACTION_DIM, DronePolicy, NavigateSpec, to_image
@@ -50,7 +50,7 @@ def test_recordings_become_rows_labeled_by_the_expert(tmp_path):
 
 
 def test_expert_plans_around_a_pillar():
-    from drone_model.experts.navigate import Pillars, waypoint
+    from drone_model.scripted.navigate import Pillars, waypoint
 
     # pillar sits squarely between the drone and the marker
     arena = {"origin": [0, -61, 0], "radius": 12, "obstacles": [[-1, 3, 2, 9]]}
@@ -75,7 +75,7 @@ def test_gae_stops_at_episode_boundaries():
 
 
 def test_planner_escapes_when_starting_inside_clearance():
-    from drone_model.experts.navigate import Pillars, waypoint
+    from drone_model.scripted.navigate import Pillars, waypoint
 
     arena = {"origin": [0, -61, 0], "radius": 12, "obstacles": [[4, -1, 2, 3]]}
     # drone hugging the east face of the pillar, chest far to the west

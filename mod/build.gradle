@@ -11,6 +11,8 @@ loom {
 		property("mcdrone.logs", file("run/logs").absolutePath)
 		// keeps the client gametest world open this many seconds so an external script can drive the bridge
 		property("mcdrone.e2eHoldSeconds", (project.findProperty("e2eHold") ?: "0").toString())
+		// Fabric API logs every custom packet at debug, which grows debug.log by hundreds of MB a training session
+		property("fabric.log.debug.level", "info")
 	}
 
 	mods {

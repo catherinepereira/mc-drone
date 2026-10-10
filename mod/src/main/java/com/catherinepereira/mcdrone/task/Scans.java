@@ -14,7 +14,7 @@ import net.minecraft.server.level.ServerLevel;
 /**
  * Scan perception: the server reads every box a job names straight from the world, the way WorldEdit copies, and writes
  * each to a schematic the drone can load. Vision perception leaves these out and the drone reads blocks with its camera.
- * A job that changes no blocks gets an empty scan: in scan perception a guard is handed the hostile mobs instead, see StateJson
+ * A job that changes no blocks gets an empty scan: in scan perception a guard is handed the mobs in its region instead, see StateJson
  */
 public final class Scans {
 	public static final String FOLDER = "scans";

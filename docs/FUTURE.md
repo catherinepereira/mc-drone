@@ -25,7 +25,10 @@ Postponed. Learning to steer around other drones is the goal, scripted traffic r
 
 ## Combat and patrols
 
-- The reader's mob classes come from zombies, husks, skeletons, creepers, cows, pigs, sheep, and chickens. Spiders, endermen, slimes, and the rest need frames of their own.
+- The reader tells apart zombies, husks, skeletons, creepers, cows, pigs, sheep, chickens, and villagers. Spiders, endermen, slimes, and the rest need frames and classes of their own, until then a guard can only hunt them in scan perception.
+- A misread on a block the voxel memory hasn't voted on yet still becomes a target until the map catches up, about 1 in 10 views of tracked prey in an all-mob hunt. Chickens read worst (IoU 0.30).
+- The learned skill gets wrecked by creepers on all-mob hunts, it flies closer than the planner's standoff.
+- A skill round on hunts alone costs builds (7 of 10 down to 1 of 10). Builds last had DAgger data in round 4, the next skill round has to cover every task.
 - Hunts and follows keep the world running in lockstep so their targets move, which makes those episodes differ from run to run on the same seed.
 - A drone has 20 health and no armor or upgrades. Tiers change the beam's damage, not the drone's toughness.
 - Creepers only come after a drone that hit them, and a provoked one explodes like it would at a player, blocks included.
@@ -34,8 +37,11 @@ Postponed. Learning to steer around other drones is the goal, scripted traffic r
 ## Getting somewhere
 
 - find_block and seek_block only find blocks the reader has a class for, about 40 kinds.
+- Reader v4 reads glowstone worse than v3 (IoU 0.58 against 0.73). Cave arenas with glowstone haven't been rechecked with it.
 - A follow job keeps the drone within 48 blocks across of where it started, a player walking farther ends it as out of bounds.
 - follow_mob trains on a villager. Players move faster and more sharply.
+- The goto policy turns back and forth more than the skill, 9 to 14 reversals per 100 steps on rough goto_point, find_block, and dock_station.
+- Docking is checked in the dock_station arena, the flight home in a player's world hasn't been flown end to end since the arenas started moving off stations.
 - The scripted goto planner reaches cave points 4 times in 6. It climbs into pockets under low dips in the uneven roof and keeps trying a gap too low for it. Flat and rough points it reaches every time.
 
 ## Map

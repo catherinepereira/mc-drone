@@ -44,7 +44,7 @@ public final class JobScreen extends Screen {
 		MINE("Mine blocks in a region", "mine_region"),
 		HARVEST("Harvest and replant crops", "harvest_region"),
 		PATROL("Patrol a region", "patrol_region"),
-		GUARD("Guard a region from hostile mobs", "guard_region"),
+		GUARD("Guard a region from mobs", "guard_region"),
 		FLY("Fly to the paste point", "fly_to"),
 		SEEK("Find a block in a region", "seek_block"),
 		FOLLOW("Follow me", "follow_player");
@@ -64,6 +64,8 @@ public final class JobScreen extends Screen {
 	private String dest = SELECTION;
 	private String gather = NONE;
 	private String subject = "";
+	// a guard's prey, blank for hostile mobs
+	private String prey = "";
 	private String regionName = "";
 	private String purpose = "general";
 	private @Nullable String message;
@@ -162,6 +164,16 @@ public final class JobScreen extends Screen {
 			y = this.nextRow(y);
 		}
 
+		if (this.action == Action.GUARD) {
+			EditBox box = new EditBox(this.font, this.left, y, W, 20, Component.literal("prey"));
+			box.setMaxLength(200);
+			box.setHint(Component.literal("mobs: hostile, all, or kinds such as cow, zombie"));
+			box.setValue(this.prey);
+			box.setResponder(v -> this.prey = v);
+			this.addRenderableWidget(box);
+			y = this.nextRow(y);
+		}
+
 		int third = (W - 8) / 3;
 		this.addRenderableWidget(Button.builder(Component.literal("Start job"), b -> this.start(false)).bounds(this.left, y, third, 20).build());
 		this.addRenderableWidget(Button.builder(Component.literal("Add to queue"), b -> this.start(true)).bounds(this.left + third + 4, y, third, 20).build());
@@ -235,6 +247,9 @@ public final class JobScreen extends Screen {
 				options.addProperty("blocks", name);
 			} else if (this.action == Action.PATROL || this.action == Action.GUARD) {
 				options.addProperty("rounds", name);
+				if (this.action == Action.GUARD && !this.prey.isBlank()) {
+					options.addProperty("prey", this.prey.trim());
+				}
 			} else if (this.action == Action.SEEK) {
 				options.addProperty("block", name);
 			} else {
@@ -345,7 +360,7 @@ public final class JobScreen extends Screen {
 			case MINE -> "Mines every block of those kinds, only inside the region";
 			case HARVEST -> "Ripe crops come out, and every empty farmland cell gets replanted";
 			case PATROL -> "Flies over every part of the region, round after round";
-			case GUARD -> "Patrols the region and kills the hostile mobs it finds there";
+			case GUARD -> "Patrols the region and kills the mobs it's told to, hostile ones unless named";
 			case FLY -> "Flies to the point, around whatever is in the way";
 			case SEEK -> "Searches the region with its camera and flies to the nearest one";
 			case FOLLOW -> "Keeps 2 to 5 blocks from you until you stop it";

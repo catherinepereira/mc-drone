@@ -13,7 +13,7 @@ import numpy as np
 import torch
 from torch import nn
 
-from ..experts.jobs import episode_expert
+from ..scripted.jobs import episode_expert
 from ..paths import SCHEMATICS
 from ..torch_utils import load_weights
 
@@ -24,7 +24,7 @@ class Step:
 
     state: dict  # the drone's state, privileged fields included, record must only read what the policy may
     obs: dict  # the env's observation: rgb, depth, mask, and the vectors DroneEnv adds
-    label: dict  # the teacher's action for this step, see experts.base.tool_action
+    label: dict  # the teacher's action for this step, see scripted.base.tool_action
     prev: dict | None  # what flew on the step before, None on the first step
     mask_ids: dict  # the mod's names for mask ids, sent on connect
     teacher: Any = None  # the teacher itself on a live run, None for a recorded episode
@@ -55,6 +55,8 @@ class PolicySpec:
     batch_size = 128
     # keep every stride-th step of an episode for flat training, neighboring frames are nearly the same
     stride = 1
+    # weight of the penalty on the predicted turn reversing between consecutive steps, see look
+    smoothness = 0.0
 
     def model(self) -> nn.Module:
         raise NotImplementedError
@@ -69,6 +71,10 @@ class PolicySpec:
 
     def loss(self, model: nn.Module, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         """The training loss as "loss" plus anything worth printing. A sequence batch adds "valid", False on padding"""
+        raise NotImplementedError
+
+    def look(self, model: nn.Module, batch: dict[str, torch.Tensor]) -> torch.Tensor:
+        """The predicted turn for a flat batch as (yaw, pitch) rows, needed when smoothness is above 0"""
         raise NotImplementedError
 
     def augment(self, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:

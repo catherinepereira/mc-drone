@@ -20,6 +20,8 @@ import org.jspecify.annotations.Nullable;
  */
 public final class TaskScorer {
 	public static final double SUCCESS_BONUS = 10.0;
+	// degrees per tick, slower turns don't count toward reversals
+	private static final float REVERSAL_RATE = 1.0F;
 	// tool tasks reward approach only down to roughly reach distance, the rest is the tool's job
 	private static final double TOOL_STANDOFF = 3.0;
 
@@ -51,6 +53,11 @@ public final class TaskScorer {
 	private float lastHealth = -1;
 	private float damage;
 	private boolean wrecked;
+	// back-and-forth turning: each reversal of the yaw or pitch turn costs jitterPenalty
+	private double jitterPenalty;
+	private float lastYawRate;
+	private float lastPitchRate;
+	private int turnReversals;
 	// a patrol's cells as x, z, the ones visited this round, and the rounds flown, see PatrolJob
 	private List<double[]> patrolCells = List.of();
 	private boolean[] visited = new boolean[0];
@@ -69,7 +76,7 @@ public final class TaskScorer {
 
 	public void begin(
 		String episodeId, TaskKind kind, long seed, BlockPos marker, JsonObject arena, int maxSteps, double successDist, double collisionPenalty,
-		int boundsPadding, double outOfBoundsPenalty, double damagePenalty
+		int boundsPadding, double outOfBoundsPenalty, double damagePenalty, double jitterPenalty
 	) {
 		JsonArray origin = arena.getAsJsonArray("origin");
 		int radius = arena.get("radius").getAsInt() + boundsPadding;
@@ -87,6 +94,10 @@ public final class TaskScorer {
 		this.outOfBoundsPenalty = outOfBoundsPenalty;
 		this.outOfBounds = false;
 		this.damagePenalty = damagePenalty;
+		this.jitterPenalty = jitterPenalty;
+		this.lastYawRate = 0;
+		this.lastPitchRate = 0;
+		this.turnReversals = 0;
 		this.lastHealth = -1;
 		this.damage = 0;
 		this.wrecked = false;
@@ -128,6 +139,14 @@ public final class TaskScorer {
 		this.followTicks = job != null && job.has("ticks") ? job.get("ticks").getAsInt() : 0;
 		this.inBand = 0;
 		this.prevBandGap = -1;
+	}
+
+	/** The arena's charging station for a dock_station episode, null otherwise */
+	public @Nullable BlockPos dockStation() {
+		if (this.kind != TaskKind.DOCK_STATION || !this.arena.has("targets") || this.arena.getAsJsonArray("targets").isEmpty()) {
+			return null;
+		}
+		return Json.readPos(this.arena.getAsJsonArray("targets").get(0).getAsJsonArray());
 	}
 
 	/** The entity a follow keeps up with, -1 for other tasks */
@@ -186,6 +205,30 @@ public final class TaskScorer {
 			this.totalReward += reward;
 		}
 		this.lastHealth = health;
+	}
+
+	/** The drone's turn rates once a tick, in degrees per tick */
+	public void turn(float yawRate, float pitchRate) {
+		if (!this.active || this.done()) {
+			return;
+		}
+		int flips = reversed(this.lastYawRate, yawRate) + reversed(this.lastPitchRate, pitchRate);
+		// slower turns keep the last counted rate, so easing through zero still counts the reversal once
+		if (Math.abs(yawRate) >= REVERSAL_RATE) {
+			this.lastYawRate = yawRate;
+		}
+		if (Math.abs(pitchRate) >= REVERSAL_RATE) {
+			this.lastPitchRate = pitchRate;
+		}
+		if (flips > 0) {
+			this.turnReversals += flips;
+			this.stepReward -= this.jitterPenalty * flips;
+			this.totalReward -= this.jitterPenalty * flips;
+		}
+	}
+
+	private static int reversed(float last, float now) {
+		return Math.abs(now) >= REVERSAL_RATE && Math.abs(last) >= REVERSAL_RATE && Math.signum(now) != Math.signum(last) ? 1 : 0;
 	}
 
 	public double[] bounds() {
@@ -355,7 +398,7 @@ public final class TaskScorer {
 		return reward;
 	}
 
-	// a patrol flew every round, and a guard's region has no hostile mob left
+	// a patrol flew every round, and a guard's region has none of its prey left
 	private boolean patrolled() {
 		boolean flown = this.rounds > 0 && this.roundsDone >= this.rounds;
 		return switch (this.kind) {
@@ -414,6 +457,10 @@ public final class TaskScorer {
 			case GOTO_POINT, FLY_TO -> this.point;
 			// the nearest block of the kind, the drone has to find them, the reward knows where they are
 			case FIND_BLOCK, SEEK_BLOCK -> this.nearestTarget(drone, p -> true);
+			case DOCK_STATION -> {
+				Vec3 station = this.nearestTarget(drone, p -> true);
+				yield station == null ? null : station.add(0, 1, 0);
+			}
 			// see follow
 			case FOLLOW_MOB, FOLLOW_PLAYER -> null;
 		};
@@ -450,6 +497,7 @@ public final class TaskScorer {
 		json.addProperty("success", this.success);
 		json.addProperty("truncated", this.truncated);
 		json.addProperty("collisions", this.collisions);
+		json.addProperty("turnReversals", this.turnReversals);
 		json.addProperty("droneCollisions", this.droneCollisions);
 		json.addProperty("outOfBounds", this.outOfBounds);
 		json.addProperty("damage", this.damage);

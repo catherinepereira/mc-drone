@@ -1,14 +1,24 @@
 import { useEffect, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { ConfigView } from "./components/ConfigView";
 import { EpisodesView } from "./components/EpisodesView";
 import { LiveView } from "./components/LiveView";
 import { LogsView } from "./components/LogsView";
 import { MapView } from "./components/MapView";
 import { MetricsView } from "./components/MetricsView";
+import { SystemView } from "./components/SystemView";
 import { Pill } from "./components/ui";
 import { useBridge } from "./stores/bridge";
 
-const TABS = ["Live", "Map", "Episodes", "Logs", "Metrics", "Config"] as const;
+const TABS = [
+  "Live",
+  "Map",
+  "Episodes",
+  "Logs",
+  "Metrics",
+  "System",
+  "Config",
+] as const;
 type Tab = (typeof TABS)[number];
 
 function readTab(): Tab {
@@ -21,8 +31,17 @@ function readTab(): Tab {
 }
 
 export function App() {
-  const { connect, connected, role, status, lastError, clearError } =
-    useBridge();
+  // only these fields, the whole store changes with every camera frame
+  const { connect, connected, role, status, lastError, clearError } = useBridge(
+    useShallow((s) => ({
+      connect: s.connect,
+      connected: s.connected,
+      role: s.role,
+      status: s.status,
+      lastError: s.lastError,
+      clearError: s.clearError,
+    })),
+  );
   const [tab, setTab] = useState<Tab>(readTab);
 
   useEffect(connect, [connect]);
@@ -43,7 +62,7 @@ export function App() {
             <h1 className="text-lg font-semibold">MC Drone</h1>
             <span className="text-text-muted text-sm">dev panel</span>
           </div>
-          <nav className="flex gap-1">
+          <nav className="flex flex-wrap gap-1">
             {TABS.map((t) => (
               <button
                 key={t}
@@ -97,6 +116,7 @@ export function App() {
         {tab === "Episodes" && <EpisodesView />}
         {tab === "Logs" && <LogsView />}
         {tab === "Metrics" && <MetricsView />}
+        {tab === "System" && <SystemView />}
         {tab === "Config" && <ConfigView />}
       </main>
     </div>

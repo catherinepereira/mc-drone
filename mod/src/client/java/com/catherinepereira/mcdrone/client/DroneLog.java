@@ -4,9 +4,11 @@ import com.google.gson.JsonObject;
 import java.io.BufferedWriter;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -41,11 +43,27 @@ public final class DroneLog {
 		this.config = config;
 		try {
 			Files.createDirectories(dir);
+			this.prune(dir);
 			this.out = Files.newBufferedWriter(
 				dir.resolve("mod-" + session + ".jsonl"), StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.APPEND
 			);
 		} catch (IOException e) {
 			ClientRuntime.LOGGER.error("log file unavailable, logging to memory only", e);
+		}
+	}
+
+	/** Removes session logs older than config.logRetentionDays, only mod-*.jsonl in the log folder */
+	private void prune(Path dir) throws IOException {
+		if (this.config.logRetentionDays == 0) {
+			return;
+		}
+		Instant cutoff = Instant.now().minus(Duration.ofDays(this.config.logRetentionDays));
+		try (DirectoryStream<Path> logs = Files.newDirectoryStream(dir, "mod-*.jsonl")) {
+			for (Path log : logs) {
+				if (Files.getLastModifiedTime(log).toInstant().isBefore(cutoff)) {
+					Files.delete(log);
+				}
+			}
 		}
 	}
 

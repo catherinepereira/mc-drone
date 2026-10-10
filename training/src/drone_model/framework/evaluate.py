@@ -1,7 +1,7 @@
 """
 Runs a trained policy, or its teacher alone, on evaluation seeds and reports the success rate
 
-    python -m drone_model.framework.evaluate --policy navigate --checkpoint checkpoints/ppo.pt --obstacles 16
+    python -m drone_model.framework.evaluate --policy navigate --checkpoint checkpoints/navigate.pt --obstacles 16
     python -m drone_model.framework.evaluate --policy skill --task hunt_mobs
     python -m drone_model.framework.evaluate --policy skill --task hunt_mobs --teacher
 """
@@ -32,6 +32,14 @@ def outcome(episode: dict) -> str:
     if episode.get("wrecked"):
         return "wrecked"
     return "out of bounds" if episode.get("outOfBounds") else "timeout"
+
+
+def prey_killed(results: list[dict]) -> float | None:
+    """Share of all prey killed over a hunt's or guard's episodes"""
+    starts = [r["metrics"] for r in results if r.get("metrics") and r["metrics"][2] > 0]
+    if not starts:
+        return None
+    return sum(m[2] - m[0] for m in starts) / sum(m[2] for m in starts)
 
 
 class Runner:
@@ -75,10 +83,16 @@ def main() -> None:
     parser.add_argument("--perception", choices=["vision", "scan"], default="vision")
     parser.add_argument("--teacher-sees", choices=["reader", "mask"], default="reader")
     parser.add_argument("--reader", type=Path, default=CHECKPOINTS / "reader.pt")
+    parser.add_argument("--max-steps", type=int, default=None, help="the task's own limit by default")
+    parser.add_argument("--prey", default=None, help="a hunt's prey: hostile, all, or kinds such as cow,zombie, the arena picks when left out")
     args = parser.parse_args()
 
     runner = Runner(args.policy, args.checkpoint, args.teacher, Reader(args.reader) if args.teacher_sees == "reader" else None)
     options = {"obstacles": args.obstacles, "terrain": args.terrain, "size": args.size, "perception": args.perception}
+    if args.prey:
+        options["prey"] = args.prey
+    if args.max_steps:
+        options["maxSteps"] = args.max_steps
     env = DroneEnv(task=args.task, tools=True, streams=runner.spec.streams, action_pause_ms=0, task_options=options)
     results = []
     try:
@@ -94,23 +108,35 @@ def main() -> None:
             results.append({
                 "seed": EVAL_SEED + i, "success": bool(ep.get("success")), "outcome": outcome(ep), "steps": ep.get("step"),
                 "total_reward": ep.get("totalReward"), "collisions": ep.get("collisions"), "damage": ep.get("damage"),
-                "metrics": ep.get("metrics"), "seconds": time.perf_counter() - start,
+                "turn_reversals": ep.get("turnReversals"),
+                "metrics": ep.get("metrics"), "seconds": time.perf_counter() - start, "end_pos": info["state"].get("pos"),
+                "bounds": info["state"].get("bounds"),
             })
-            print(f"seed {EVAL_SEED + i}: {outcome(ep)} in {ep.get('step')} steps, metrics {ep.get('metrics')}", flush=True)
+            where = f", ended at {np.round(info['state']['pos'], 1).tolist()} in bounds {info['state'].get('bounds')}" if ep.get("outOfBounds") else ""
+            print(f"seed {EVAL_SEED + i}: {outcome(ep)} in {ep.get('step')} steps, metrics {ep.get('metrics')}{where}", flush=True)
     finally:
         env.close()
 
     wins = [r for r in results if r["success"]]
     who = "teacher" if args.teacher else (args.checkpoint or runner.checkpoint).stem
     summary = {
-        "policy": args.policy, "flown_by": who, "task": args.task, "terrain": args.terrain, "obstacles": args.obstacles,
+        "policy": args.policy, "flown_by": who, "task": args.task, "terrain": args.terrain, "obstacles": args.obstacles, "prey": args.prey,
         "perception": args.perception, "episodes": len(results), "success_rate": len(wins) / len(results),
         "mean_steps_on_success": float(np.mean([r["steps"] for r in wins])) if wins else None,
-        "mean_collisions": float(np.mean([r["collisions"] or 0 for r in results])), "results": results,
+        "mean_collisions": float(np.mean([r["collisions"] or 0 for r in results])),
+        "turn_reversals_per_100_steps": float(100 * sum(r["turn_reversals"] or 0 for r in results) / max(sum(r["steps"] or 0 for r in results), 1)),
+        # hunts and guards: their metrics are prey left, kills, and prey at the start, the drone itself is never told how many
+        "prey_killed": prey_killed(results) if args.task in ("hunt_mobs", "guard_region") else None,
+        "results": results,
     }
-    out = REPORTS / "eval" / f"{args.task}-{args.policy}-{who}-{args.terrain}-{datetime.now():%Y%m%d-%H%M%S}.json"
+    prey = f"-{args.prey.replace(',', '+').replace(':', '_')}" if args.prey else ""
+    out = REPORTS / "eval" / f"{args.task}{prey}-{args.policy}-{who}-{args.terrain}-{datetime.now():%Y%m%d-%H%M%S}.json"
     write_report(out, **summary)
-    print(f"{args.policy} ({who}): success rate {summary['success_rate']:.0%} over {len(results)} episodes, report {out}")
+    killed = f", {summary['prey_killed']:.0%} of prey killed" if summary["prey_killed"] is not None else ""
+    print(
+        f"{args.policy} ({who}): success rate {summary['success_rate']:.0%} over {len(results)} episodes{killed}, "
+        f"{summary['turn_reversals_per_100_steps']:.1f} turn reversals per 100 steps, report {out}"
+    )
 
 
 if __name__ == "__main__":

@@ -96,6 +96,8 @@ export function JobsPanel() {
   const [mineKind, setMineKind] = useState<JobKind>("mine");
   const [destRegion, setDestRegion] = useState("");
   const [gatherRegion, setGatherRegion] = useState("");
+  // a guard's prey, blank for hostile mobs
+  const [prey, setPrey] = useState("");
   const [busy, setBusy] = useState(false);
   const selection = status?.selection;
   const regions = status?.regions ?? [];
@@ -210,7 +212,7 @@ export function JobsPanel() {
               <option value="mine">Mine</option>
               <option value="harvest">Harvest</option>
               <option value="patrol">Patrol</option>
-              <option value="guard">Guard from hostile mobs</option>
+              <option value="guard">Guard from mobs</option>
               <option value="seek">Find a block</option>
             </select>
           </Field>
@@ -238,6 +240,18 @@ export function JobsPanel() {
               />
             </Field>
           </div>
+          {mineKind === "guard" && (
+            <div className="flex-1">
+              <Field label="Mobs">
+                <input
+                  className={inputClass}
+                  placeholder="hostile, all, or cow, zombie"
+                  value={prey}
+                  onChange={(e) => setPrey(e.target.value)}
+                />
+              </Field>
+            </div>
+          )}
           <Button
             disabled={
               !controller ||
@@ -251,6 +265,9 @@ export function JobsPanel() {
               start({
                 task: JOB_FIELD[mineKind].task,
                 ...jobOptions(mineKind, mineBlock),
+                ...(mineKind === "guard" && prey.trim()
+                  ? { prey: prey.trim() }
+                  : {}),
                 ...(mineRegion ? { region: mineRegion } : {}),
               })
             }

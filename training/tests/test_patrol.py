@@ -1,6 +1,6 @@
 import math
 
-from drone_model.experts.patrol import sweep
+from drone_model.scripted.patrol import sweep
 
 
 def test_sweep_visits_every_cell_row_by_row_from_the_nearest_corner():

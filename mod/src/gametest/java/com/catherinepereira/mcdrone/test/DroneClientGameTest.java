@@ -33,6 +33,7 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.world.entity.EntityTypes;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.inventory.ChestMenu;
@@ -345,17 +346,18 @@ public class DroneClientGameTest implements FabricClientGameTest {
 			check(patrol != null && patrol.get("kind").getAsString().equals("patrol") && !patrol.get("hunt").getAsBoolean(), "expected a patrol job, got " + patrol);
 			check(patrolled != null && patrolled.get("cells").getAsInt() == patrol.getAsJsonArray("cells").size() && patrolled.get("rounds").getAsInt() == 1, "patrol progress " + patrolled);
 
-			// hunt_mobs walls in hostile mobs and animals. The attack beam leaves an animal alone and kills a hostile mob
+			// hunt_mobs walls in hostile mobs and animals. Hunting the hostile ones, the attack beam leaves an animal alone and kills a hostile mob
 			JsonObject huntReset = msg("reset");
 			huntReset.addProperty("id", id);
 			huntReset.addProperty("seed", 21);
 			JsonObject huntOptions = new JsonObject();
 			huntOptions.addProperty("task", "hunt_mobs");
+			huntOptions.addProperty("prey", "hostile");
 			huntReset.add("options", huntOptions);
 			bridge.send(huntReset);
 			obs = awaitObs(ctx, bridge, id++);
 			JsonObject hunt = obs.header().getAsJsonObject("state").getAsJsonObject("job");
-			check(hunt != null && hunt.get("hunt").getAsBoolean() && hunt.get("rounds").getAsInt() == 0, "expected a hunt job, got " + hunt);
+			check(hunt != null && hunt.get("hunt").getAsBoolean() && hunt.get("rounds").getAsInt() == 0 && hunt.get("prey").getAsString().equals("hostile"), "expected a hunt job, got " + hunt);
 			ctx.takeScreenshot("mcdrone-hunt-mobs");
 			String huntProblem = world.getServer().computeOnServer(server -> {
 				ServerPlayer player = server.getPlayerList().getPlayers().getFirst();
@@ -370,7 +372,7 @@ public class DroneClientGameTest implements FabricClientGameTest {
 				}
 				lookDownAt(drone, animal);
 				String spared = DroneTools.apply(drone, 0, new ToolRequest(DroneTool.ATTACK, 0, 0, 0, -1, 0)).events();
-				if (!spared.contains("not hostile")) {
+				if (!spared.contains("not a target")) {
 					return "hitting a " + animal.getType() + " gave " + spared;
 				}
 				String hits = "";
@@ -402,6 +404,44 @@ public class DroneClientGameTest implements FabricClientGameTest {
 			});
 			check(huntProblem.isEmpty(), huntProblem);
 
+			// hunting cows, the beam leaves hostile mobs alone and kills a cow
+			JsonObject cowReset = msg("reset");
+			cowReset.addProperty("id", id);
+			cowReset.addProperty("seed", 22);
+			JsonObject cowOptions = new JsonObject();
+			cowOptions.addProperty("task", "hunt_mobs");
+			cowOptions.addProperty("prey", "cow");
+			cowReset.add("options", cowOptions);
+			bridge.send(cowReset);
+			obs = awaitObs(ctx, bridge, id++);
+			JsonObject cowHunt = obs.header().getAsJsonObject("state").getAsJsonObject("job");
+			check(cowHunt != null && cowHunt.get("prey").isJsonArray() && cowHunt.getAsJsonArray("prey").get(0).getAsString().equals("minecraft:cow"), "expected a cow hunt, got " + cowHunt);
+			String cowProblem = world.getServer().computeOnServer(server -> {
+				ServerPlayer player = server.getPlayerList().getPlayers().getFirst();
+				DroneEntity drone = Drones.active(player);
+				ServerLevel level = player.level();
+				ArenaRecord arena = Arena.record(drone);
+				List<Mob> mobs = level.getEntitiesOfClass(Mob.class, drone.getBoundingBox().inflate(48), m -> m.entityTags().contains("mcdrone_arena"));
+				Mob cow = mobs.stream().filter(m -> m.getType() == EntityTypes.COW).findFirst().orElse(null);
+				Mob hostile = mobs.stream().filter(m -> m instanceof Enemy).findFirst().orElse(null);
+				int[] start = arena.metrics(level, drone);
+				if (cow == null || hostile == null || start[0] < 1 || start[0] != start[2]) {
+					return "the cow hunt has " + mobs.size() + " mobs, metrics " + Arrays.toString(start);
+				}
+				lookDownAt(drone, hostile);
+				String spared = DroneTools.apply(drone, 0, new ToolRequest(DroneTool.ATTACK, 0, 0, 0, -1, 0)).events();
+				if (!spared.contains("not a target")) {
+					return "hitting a " + hostile.getType() + " on a cow hunt gave " + spared;
+				}
+				for (int i = 0; i < 200 && cow.isAlive(); i++) {
+					lookDownAt(drone, cow);
+					DroneTools.apply(drone, i, new ToolRequest(DroneTool.ATTACK, 0, 0, 0, -1, 0));
+				}
+				int[] score = arena.metrics(level, drone);
+				return !cow.isAlive() && score[0] == start[0] - 1 && score[1] == 1 ? "" : "the drone didn't kill the cow, metrics " + Arrays.toString(score);
+			});
+			check(cowProblem.isEmpty(), cowProblem);
+
 			// goto_point gives coordinates, find_block names a block among look-alikes, follow_mob hands over where a villager is
 			JsonObject gotoReset = msg("reset");
 			gotoReset.addProperty("id", id);
@@ -426,6 +466,31 @@ public class DroneClientGameTest implements FabricClientGameTest {
 			JsonObject findArena = obs.header().getAsJsonObject("state").getAsJsonObject("arena");
 			check(findJob != null && findJob.get("kind").getAsString().equals("find") && findArena.getAsJsonArray("targets").size() == 1
 				&& findArena.getAsJsonArray("distractors").size() == 3, "expected a find job with one target and three look-alikes, got " + findJob);
+
+			// dock_station puts a charging station in the arena, the episode succeeds once the drone rests on it
+			JsonObject dockReset = msg("reset");
+			dockReset.addProperty("id", id);
+			dockReset.addProperty("seed", 37);
+			JsonObject dockOptions = new JsonObject();
+			dockOptions.addProperty("task", "dock_station");
+			dockOptions.addProperty("obstacles", 0);
+			dockReset.add("options", dockOptions);
+			bridge.send(dockReset);
+			obs = awaitObs(ctx, bridge, id++);
+			JsonObject dockJob = obs.header().getAsJsonObject("state").getAsJsonObject("job");
+			check(dockJob != null && dockJob.get("kind").getAsString().equals("return_home"), "expected a return_home job on the arena's station, got " + dockJob);
+			JsonArray stationJson = dockJob.getAsJsonArray("station");
+			int[] arenaStation = {stationJson.get(0).getAsInt(), stationJson.get(1).getAsInt(), stationJson.get(2).getAsInt()};
+			boolean arenaDocked = false;
+			for (int i = 0; i < 400 && !arenaDocked; i++) {
+				JsonObject step = msg("step");
+				step.addProperty("id", id);
+				step.add("action", dockAction(obs.header().getAsJsonObject("state"), arenaStation));
+				bridge.send(step);
+				obs = awaitObs(ctx, bridge, id++);
+				arenaDocked = obs.header().getAsJsonObject("episode").get("success").getAsBoolean();
+			}
+			check(arenaDocked, "dock_station never docked, drone at " + obs.header().getAsJsonObject("state").get("pos") + ", station " + stationJson);
 
 			JsonObject followReset = msg("reset");
 			followReset.addProperty("id", id);

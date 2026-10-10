@@ -81,7 +81,6 @@ data/<task>/<episode_id>/
   rgb/000000.png
   depth/000000.f32  raw little-endian float32
   mask/000000.png  16-bit PNG
-  log.jsonl        log lines scoped to this episode
 ```
 
 Start and stop from a keybind, the HUD, the dashboard, or the bridge.
@@ -98,7 +97,7 @@ Drone tools and the `dig_block` and `chest_transfer` tasks come after v1.
 
 - JSONL with a shared shape: `ts`, `source` (mod, bridge, py, dashboard), `level`, `event`, `session_id`, `episode_id`, `tick`, plus event fields.
 - Events: connections, every action applied, mode changes, task resets, outcomes, render timings, dropped frames, and errors with stack traces.
-- Mod logs go to `mod/run/logs/mod-<session>.jsonl` in dev runs and are also tailed over the bridge. The Python package writes `py-<session>.jsonl` to the folder it's given.
+- Mod logs go to `mod/run/logs/mod-<session>.jsonl` in dev runs and are also tailed over the bridge. The mod removes session logs older than `logRetentionDays` (7 by default) when it starts. The Python package writes `py-<session>.jsonl` to the folder it's given.
 - Levels and per-category toggles in the mod config, editable from the dashboard.
 
 ## 8. Developer panels

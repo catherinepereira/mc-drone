@@ -1,8 +1,9 @@
 ﻿# Records block reader training frames (rgb, depth, mask, and the state labels) across tasks and terrains, one collection at a time
 # Seeds start at 200000, clear of demo (0 and up) and evaluation (100000 and up) seeds
-# -Set structures records only the larger copy, build, mine, and gather arenas, -Set mobs the hunt and patrol arenas, flown
-# with the mod's mask so the experts see mobs before the reader can
-param([ValidateSet("all", "base", "structures", "mobs")][string]$Set = "all")
+# -Set structures records only the larger copy, build, mine, and gather arenas, -Set mobs the hunt and patrol arenas, and
+# -Set find the find_block arenas, the last two flown with the mod's mask so the experts see what the reader can't yet.
+# -Tasks narrows a set to some of its tasks, such as follow_mob
+param([ValidateSet("all", "base", "structures", "mobs", "find")][string]$Set = "all", [string]$Tasks = "")
 $model = Split-Path $PSScriptRoot -Parent
 $python = Join-Path $model ".venv\Scripts\python.exe"
 $base = @(
@@ -26,12 +27,30 @@ $mobs = @(
   @{ task = "hunt_mobs"; terrain = "rough"; episodes = 30; seed = 213000; steps = 1500; size = 5; perception = "mask" },
   @{ task = "hunt_mobs"; terrain = "cave"; episodes = 30; seed = 214000; steps = 1500; size = 5; perception = "mask" },
   @{ task = "patrol_area"; terrain = "flat"; episodes = 15; seed = 215000; steps = 800; size = 5; perception = "mask" },
-  @{ task = "patrol_area"; terrain = "rough"; episodes = 15; seed = 216000; steps = 800; size = 5; perception = "mask" }
+  @{ task = "patrol_area"; terrain = "rough"; episodes = 15; seed = 216000; steps = 800; size = 5; perception = "mask" },
+  @{ task = "follow_mob"; terrain = "flat"; episodes = 15; seed = 220000; steps = 600; size = 5; perception = "mask" },
+  @{ task = "follow_mob"; terrain = "rough"; episodes = 15; seed = 221000; steps = 600; size = 5; perception = "mask" },
+  # hunts after the small animals, so the reader sees them up close
+  @{ task = "hunt_mobs"; terrain = "flat"; episodes = 20; seed = 225000; steps = 1500; size = 5; perception = "mask"; prey = "chicken" },
+  @{ task = "hunt_mobs"; terrain = "rough"; episodes = 15; seed = 226000; steps = 1500; size = 5; perception = "mask"; prey = "chicken" },
+  @{ task = "hunt_mobs"; terrain = "flat"; episodes = 15; seed = 227000; steps = 1500; size = 5; perception = "mask"; prey = "sheep,pig" },
+  @{ task = "hunt_mobs"; terrain = "rough"; episodes = 15; seed = 228000; steps = 1500; size = 5; perception = "mask"; prey = "sheep,pig,cow" }
 )
-$runs = switch ($Set) { "base" { $base } "structures" { $structures } "mobs" { $mobs } default { $base + $structures + $mobs } }
+# a lone target among decoys from the same block list
+$find = @(
+  @{ task = "find_block"; terrain = "flat"; episodes = 40; seed = 217000; steps = 600; size = 5; perception = "mask" },
+  @{ task = "find_block"; terrain = "rough"; episodes = 40; seed = 218000; steps = 600; size = 5; perception = "mask" },
+  @{ task = "find_block"; terrain = "cave"; episodes = 30; seed = 219000; steps = 600; size = 5; perception = "mask" }
+)
+$runs = switch ($Set) { "base" { $base } "structures" { $structures } "mobs" { $mobs } "find" { $find } default { $base + $structures + $mobs + $find } }
+if ($Tasks) {
+  $keep = $Tasks.Split(",")
+  $runs = $runs | Where-Object { $keep -contains $_.task }
+}
 foreach ($r in $runs) {
   "$(Get-Date -Format HH:mm:ss) $($r.task) $($r.terrain) x$($r.episodes)"
   $perception = if ($r.perception) { $r.perception } else { "reader" }
-  & $python -m drone_model.collect.demos --task $r.task --terrain $r.terrain --size $r.size --episodes $r.episodes --seed $r.seed --obstacles 4 --noise 0.15 --streams "rgb,depth,mask,state" --max-steps $r.steps --perception $perception 2>&1 | Select-String "success rate|Traceback|Error"
+  $extra = if ($r.prey) { @("--prey", $r.prey) } else { @() }
+  & $python -m drone_model.collect.demos --task $r.task --terrain $r.terrain --size $r.size --episodes $r.episodes --seed $r.seed --obstacles 4 --noise 0.15 --streams "rgb,depth,mask,state" --max-steps $r.steps --perception $perception @extra 2>&1 | Select-String "success rate|Traceback|Error"
 }
 "$(Get-Date -Format HH:mm:ss) done"

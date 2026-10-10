@@ -20,11 +20,12 @@ from mcdrone import DroneEnv, list_episodes
 from mcdrone.dataset import action_array
 
 from .. import labels as expert_labels
-from ..experts.base import TOOLS, tool_action
+from ..scripted.base import TOOLS, tool_action
 from ..paths import CHECKPOINTS, DATA
 from ..perception.reader import Reader
 from ..torch_utils import pick_device
 from .data import run_dir, save_episode
+from .evaluate import outcome
 from .registry import get
 from .spec import PolicySpec, Step
 
@@ -35,6 +36,8 @@ def collect(spec: PolicySpec, args, out: Path) -> None:
     options = {"obstacles": args.obstacles, "terrain": args.terrain, "size": args.size, "perception": args.perception}
     if args.max_steps:
         options["maxSteps"] = args.max_steps
+    if args.prey:
+        options["prey"] = args.prey
     env = DroneEnv(task=args.task, tools=True, streams=spec.streams, action_pause_ms=0, task_options=options)
     agent = None
     try:
@@ -64,7 +67,7 @@ def collect(spec: PolicySpec, args, out: Path) -> None:
                 prev = action
                 obs, _, terminated, truncated, info = env.step(action)
             save_episode(out / f"{seed}.npz", rows)
-            print(f"episode {i + 1}/{args.episodes}: {len(rows)} rows, {'success' if info['episode'].get('success') else 'not finished'}", flush=True)
+            print(f"episode {i + 1}/{args.episodes}: {len(rows)} rows, {outcome(info['episode'])}", flush=True)
     finally:
         env.close()
 
@@ -113,6 +116,7 @@ def main() -> None:
     parser.add_argument("--recordings", default=None, help="a task folder of recorded episodes to turn into rows instead of flying")
     parser.add_argument("--every-outcome", action="store_true", help="with --recordings, keep failed expert episodes too")
     parser.add_argument("--run", default=None, help="data folder under data/policies/<policy>, task-terrain by default")
+    parser.add_argument("--prey", default=None, help="a hunt's prey: hostile, all, or kinds such as cow,zombie, the arena picks when left out")
     args = parser.parse_args()
 
     spec = get(args.policy)

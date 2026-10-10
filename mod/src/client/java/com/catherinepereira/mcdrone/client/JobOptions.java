@@ -35,6 +35,19 @@ public final class JobOptions {
 		return "";
 	}
 
+	/** A hunt's or guard's prey: "hostile", "all", or mob kinds as a list or separated by commas, see task.Prey */
+	public static String prey(JsonObject options) {
+		if (!options.has("prey")) {
+			return "";
+		}
+		if (options.get("prey").isJsonArray()) {
+			List<String> names = new ArrayList<>();
+			options.getAsJsonArray("prey").forEach(e -> names.add(e.getAsString()));
+			return String.join(",", names);
+		}
+		return options.get("prey").getAsString();
+	}
+
 	/**
 	 * The job's box corners and paste point as 9 ints, then a gather box's corners as 6 more when it has one.
 	 * Throws IllegalArgumentException saying why the job can't start
@@ -132,12 +145,18 @@ public final class JobOptions {
 			case HARVEST_REGION -> "harvest " + what + " in " + region;
 			case RETURN_HOME -> "return home";
 			case PATROL_REGION -> "patrol " + region + rounds(subject);
-			case GUARD_REGION -> "guard " + region + rounds(subject);
+			case GUARD_REGION -> "guard " + region + rounds(subject) + preyLabel(options);
 			case FLY_TO -> "fly to " + dest;
 			case SEEK_BLOCK -> "find " + what + " in " + region;
 			case FOLLOW_PLAYER -> "follow me";
 			default -> kind.id;
 		};
+	}
+
+	// " from cow, zombie", nothing for hostile mobs, the default
+	private static String preyLabel(JsonObject options) {
+		String prey = prey(options);
+		return prey.isBlank() || prey.equals("hostile") ? "" : " from " + prey.replace("minecraft:", "").replace(",", ", ");
 	}
 
 	/** Tool tasks take more steps: flying, mining, and container work */
@@ -148,7 +167,7 @@ public final class JobOptions {
 			case CHEST_TRANSFER -> 600;
 			case MINE_AND_DELIVER, REPLICATE_BUILD -> 900;
 			case HARVEST_CROPS, PATROL_AREA, FIND_BLOCK, FOLLOW_MOB -> 1500;
-			case GOTO_POINT -> 600;
+			case GOTO_POINT, DOCK_STATION -> 600;
 			case HUNT_MOBS -> 3000;
 			case COPY_BUILD, SCHEMATIC_BUILD, MINE_DEPOSIT, GATHER_BUILD -> 20000;
 			// a job runs until it's done or stopped, sized for the largest 16x16x16 builds

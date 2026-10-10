@@ -19,6 +19,7 @@ const NUMBER_FIELDS: { key: string; label: string; step?: number }[] = [
   { key: "boundsPadding", label: "Geofence padding (blocks)" },
   { key: "outOfBoundsPenalty", label: "Out of bounds penalty", step: 0.5 },
   { key: "actionPauseMs", label: "Pause after tool actions (ms)", step: 50 },
+  { key: "logRetentionDays", label: "Keep session logs (days, 0 for all)" },
 ];
 const STREAMS = ["rgb", "depth", "mask"];
 const LEVELS = ["debug", "info", "warn", "error"];

@@ -82,6 +82,8 @@ export interface EpisodeInfo {
   truncated?: boolean;
   collisions?: number;
   droneCollisions?: number;
+  // times the yaw or pitch turn reversed direction, each costs jitterPenalty
+  turnReversals?: number;
   outOfBounds?: boolean;
   metrics?: number[];
   // patrol cells flown this round and rounds flown, for patrol and guard jobs and arenas

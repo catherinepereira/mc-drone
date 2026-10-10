@@ -57,7 +57,7 @@ public final class PlayerJobs {
 			}
 			case MINE_REGION -> MineJob.start(level, a, b, req.subject(), drone != null ? drone.tier() : DroneTier.COPPER);
 			case HARVEST_REGION -> HarvestJob.start(level, a, b, req.subject());
-			case PATROL_REGION, GUARD_REGION -> PatrolJob.start(level, a, b, req.subject(), kind == TaskKind.GUARD_REGION);
+			case PATROL_REGION, GUARD_REGION -> PatrolJob.start(level, a, b, req.subject(), kind == TaskKind.GUARD_REGION, Prey.parse(req.prey()));
 			case FLY_TO -> GotoJob.point(dest);
 			case SEEK_BLOCK -> GotoJob.block(level, a, b, req.subject(), found);
 			case FOLLOW_PLAYER -> GotoJob.follow(player, 0);

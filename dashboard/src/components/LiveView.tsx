@@ -132,6 +132,7 @@ export function LiveView() {
                   ? `, ${episode.droneCollisions} with drones`
                   : ""}
               </Row>
+              <Row label="Turn reversals">{episode.turnReversals ?? 0}</Row>
               {episode.patrol && (
                 <Row label="Patrol">
                   {episode.patrol.visited} of {episode.patrol.cells} cells,

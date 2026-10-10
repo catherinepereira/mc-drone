@@ -20,14 +20,20 @@ from ..paths import CHECKPOINTS, DATA
 from ..perception.reader import CLASSES, NOT_CROP, BlockReader, entity_table, state_tables
 from ..torch_utils import BestCheckpoint, autocast, pick_device, split_episodes, write_report
 
-CACHE = "reader-frames-mobs"
+# named for the class list, the cached labels are class indices
+CACHE = "reader-frames-kinds"
 FIELDS = ("rgb", "depth", "cls", "ripe")
 # neighboring frames are nearly identical, keep every STRIDE-th
 STRIDE = 3
 
 
+def cache_dir(episode) -> Path:
+    """data/cache/<CACHE>/<task>/<episode>, apart from the recording, so a stale cache is one folder to drop"""
+    return episode.path.parents[1] / "cache" / CACHE / episode.path.parent.name / episode.path.name
+
+
 def cache_episode(episode, classes: np.ndarray, ripe: np.ndarray, entities: np.ndarray, entity_base: int) -> dict[str, np.ndarray] | None:
-    cache = episode.path / CACHE
+    cache = cache_dir(episode)
     if not (cache / "done").exists():
         frames = [n for n in range(0, len(episode.steps), STRIDE) if episode.has("state", n) and episode.has("rgb", n)]
         if not frames:
@@ -52,22 +58,12 @@ def cache_episode(episode, classes: np.ndarray, ripe: np.ndarray, entities: np.n
     return {k: np.load(cache / f"{k}.npy", mmap_mode="r") for k in FIELDS}
 
 
-def mob_categories(data: Path) -> dict[str, str]:
-    """Each entity's mob category by name, from any task folder's mask ids that list them, older ones don't"""
-    out: dict[str, str] = {}
-    for path in data.glob("*/mask_ids.json"):
-        ids = json.loads(path.read_text(encoding="utf-8"))
-        out.update(zip(ids["entities"], ids.get("categories", [])))
-    return out
-
-
 def load_frames(data: Path) -> list[dict[str, np.ndarray]]:
     out = []
-    categories = mob_categories(data)
     for task_dir in sorted(p for p in data.iterdir() if (p / "state_names.json").exists()):
         classes, ripe = state_tables(json.loads((task_dir / "state_names.json").read_text(encoding="utf-8")))
         mask_ids = json.loads((task_dir / "mask_ids.json").read_text(encoding="utf-8"))
-        entities = entity_table(mask_ids["entities"], categories)
+        entities = entity_table(mask_ids["entities"])
         # an episode without an outcome is still being recorded
         episodes = [ep for ep in list_episodes(data, task_dir.name) if (ep.path / "state").is_dir() and ep.meta.get("outcome")]
         for ep in episodes:

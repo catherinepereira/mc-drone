@@ -4,6 +4,7 @@ import com.google.gson.JsonObject;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Vec3i;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.entity.Entity;
 
 /** Work a player hands the drone in their own world, or a training arena's equivalent */
 public interface DroneJob {
@@ -18,6 +19,11 @@ public interface DroneJob {
 
 	/** The boxes the job works in, as inclusive min and max corners, for the geofence and the reach check */
 	BlockPos[] corners();
+
+	/** Whether the drone's beam may lock on to entity while doing this job, players and drones it never may */
+	default boolean mayAttack(Entity entity) {
+		return false;
+	}
 
 	/** Whether the job breaks or places blocks, two jobs that do can't share a block */
 	default boolean changesBlocks() {

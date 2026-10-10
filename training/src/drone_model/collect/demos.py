@@ -16,7 +16,7 @@ import numpy as np
 from mcdrone import DroneEnv
 
 from .. import labels
-from ..experts.jobs import episode_expert
+from ..scripted.jobs import episode_expert
 from ..paths import CHECKPOINTS, DATA, SCHEMATICS
 from ..perception.reader import Reader
 
@@ -39,6 +39,7 @@ def main() -> None:
     parser.add_argument("--streams", default="rgb,depth,mask", help="add state to record block reader labels")
     parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--size", type=int, default=5, help="structure or deposit side for the copy, build, and mine arenas")
+    parser.add_argument("--prey", default=None, help="a hunt's prey: hostile, all, or kinds such as cow,zombie, the arena picks when left out")
     args = parser.parse_args()
     reader = Reader(args.reader) if args.perception == "reader" else None
 
@@ -46,6 +47,8 @@ def main() -> None:
     options = {"obstacles": args.obstacles, "terrain": args.terrain, "size": args.size}
     if args.max_steps:
         options["maxSteps"] = args.max_steps
+    if args.prey:
+        options["prey"] = args.prey
     env = DroneEnv(task=args.task, tools=True, streams=tuple(args.streams.split(",")), record=True, action_pause_ms=0, task_options=options)
     successes = 0
     try:

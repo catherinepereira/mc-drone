@@ -1,6 +1,6 @@
 """
 The goto policy: learned flight to a goal point, around pillars, trees, terrain, and cave roofs, from the camera image,
-depth, the range sensors, and the drone's motion. The goto planner (experts.goto) names the goal: a point given as
+depth, the range sensors, and the drone's motion. The goto planner (scripted.goto) names the goal: a point given as
 coordinates, a spot over a block it found, a place a few blocks from someone it follows, or the next search point
 """
 
@@ -14,8 +14,9 @@ from mcdrone.env import range_vector
 from torch import nn
 from torch.nn import functional as F
 
-from ..experts.base import tool_action
+from ..scripted.base import tool_action
 from ..framework.spec import Agent, PolicySpec, Step
+from ..torch_utils import load_weights, pick_device
 from .seq import conv, state_features
 from .skill import frame
 
@@ -68,18 +69,28 @@ class GotoPolicy(nn.Module):
 
 
 class GotoAgent(Agent):
+    """A trained GotoPolicy, flying the goto planner's goals and the flights home in the brain, or its teacher's in the framework"""
+
     def __init__(self, model: GotoPolicy) -> None:
         self.model = model
         self.device = next(model.parameters()).device
 
-    @torch.no_grad()
+    @classmethod
+    def load(cls, checkpoint, device: torch.device | None = None) -> "GotoAgent":
+        device = device or pick_device()
+        model = GotoPolicy().to(device)
+        load_weights(model, checkpoint, device)
+        return cls(model.eval())
+
     def act(self, step: Step) -> dict:
         """Flies the planner's goal, and on steps without one (a turn on the spot while searching) the planner's own move stands"""
         intent = step.teacher.intent if step.teacher is not None else None
-        if intent is None:
-            return step.label
-        rgb, depth = frame(step.obs)
-        tensors = [rgb, depth, drone_features(step.state), goal_features(step.state, intent)]
+        return self.fly(step.state, step.obs, intent) if intent is not None else step.label
+
+    @torch.no_grad()
+    def fly(self, state: dict, obs: dict, intent: dict) -> dict:
+        rgb, depth = frame(obs)
+        tensors = [rgb, depth, drone_features(state), goal_features(state, intent)]
         move = self.model(*[torch.from_numpy(t)[None].to(self.device) for t in tensors])
         return tool_action(move[0].float().cpu().numpy())
 
@@ -87,6 +98,7 @@ class GotoAgent(Agent):
 class GotoSpec(PolicySpec):
     name = "goto"
     stride = 2
+    smoothness = 0.2
 
     def model(self) -> nn.Module:
         return GotoPolicy()
@@ -106,6 +118,9 @@ class GotoSpec(PolicySpec):
         loss = F.mse_loss(move.float(), batch["move"])
         # the turn and climb matter most around obstacles, report them on their own
         return {"loss": loss, "forward": F.mse_loss(move[:, 0].float(), batch["move"][:, 0]), "yaw": F.mse_loss(move[:, 3].float(), batch["move"][:, 3])}
+
+    def look(self, model: nn.Module, batch: dict[str, torch.Tensor]) -> torch.Tensor:
+        return model(batch["rgb"], batch["depth"], batch["state"], batch["goal"])[:, 3:5]
 
     def agent(self, model: nn.Module, mask_ids: dict) -> Agent:
         return GotoAgent(model)

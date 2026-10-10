@@ -64,7 +64,7 @@ public final class ArenaRecord {
 	 * mine_region: blocks of the kind left in the region, how many there were at the start.
 	 * harvest_crops, harvest_region: crops ripe at the start still standing, ripe ones harvested, ripe at the start,
 	 * empty farmland cells, farmland cells.
-	 * patrol_area, hunt_mobs, patrol_region, guard_region: hostile mobs left, mobs the drone killed, hostile mobs at the start.
+	 * patrol_area, hunt_mobs, patrol_region, guard_region: prey left, mobs the drone killed, prey at the start.
 	 * goto_point, find_block, follow_mob, fly_to, seek_block, follow_player: none, the client scores them from the drone's pose
 	 */
 	public int[] metrics(ServerLevel level, DroneEntity drone) {
@@ -96,7 +96,7 @@ public final class ArenaRecord {
 				};
 			}
 			case REPLICATE_BUILD, COPY_REGION, BUILD_SCHEMATIC, MINE_REGION, HARVEST_CROPS, HARVEST_REGION, COPY_BUILD, SCHEMATIC_BUILD, MINE_DEPOSIT, GATHER_BUILD, RETURN_HOME, PATROL_AREA,
-				HUNT_MOBS, PATROL_REGION, GUARD_REGION, GOTO_POINT, FIND_BLOCK, FOLLOW_MOB, FLY_TO, SEEK_BLOCK, FOLLOW_PLAYER -> this.job.score(level);
+				HUNT_MOBS, PATROL_REGION, GUARD_REGION, GOTO_POINT, FIND_BLOCK, FOLLOW_MOB, FLY_TO, SEEK_BLOCK, FOLLOW_PLAYER, DOCK_STATION -> this.job.score(level);
 		};
 	}
 

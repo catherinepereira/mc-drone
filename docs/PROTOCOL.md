@@ -61,14 +61,14 @@ Each drone has at most one controller. A controller `hello` with `drone` control
 ```
 
 - `move` components are in [-1, 1] and scale the drone's max speed. They are relative to the drone's yaw.
-- `look` is degrees per tick, clamped to [-15, 15]. Positive yaw turns right, positive pitch looks down (Minecraft convention).
-- `tool` is `none`, `break`, `place`, `open`, `close`, or `attack`. `break` mines the block under the crosshair within 4.5 blocks and progresses each tick it stays on, at stone-pickaxe speed, with drops going into the inventory. `place` puts a block from `slot` against the face under the crosshair. `open` opens the container under the crosshair, `close` closes it. The container closes on its own once it is more than 6 blocks from the camera. `attack` is a guardian's beam. Held on a hostile mob (vanilla's `Enemy` mobs) under the crosshair within 10 blocks, it locks on, and stays locked while the mob is alive, within 10 blocks, and in sight, wherever the crosshair goes. It charges for 15 drone ticks, purple to yellow, then deals the damage of the tier's sword (copper 5, iron 6, diamond 7, netherite 8) and starts charging again. Each discharge answers with an `attack` event naming the `entity` and whether it was `killed`. A beam on anything that isn't hostile, or on nothing, gets an `attack_failed` event with the `reason`. The hit is a mob attack from the drone, so the mob turns on it the way mobs go after a player's wolf that bit them.
+- `look` is degrees per tick, clamped to [-15, 15]. Positive yaw turns right, positive pitch looks down (Minecraft convention). The drone's turn rate eases toward it each tick by `turnSmoothing` (config, default 0.35), as its velocity eases toward `move` by `smoothing`, so the camera can't snap from turning one way to the other.
+- `tool` is `none`, `break`, `place`, `open`, `close`, or `attack`. `break` mines the block under the crosshair within 4.5 blocks and progresses each tick it stays on, at stone-pickaxe speed, with drops going into the inventory. `place` puts a block from `slot` against the face under the crosshair. `open` opens the container under the crosshair, `close` closes it. The container closes on its own once it is more than 6 blocks from the camera. `attack` is a guardian's beam. Held on a mob under the crosshair within 10 blocks, it locks on, and stays locked while the mob is alive, within 10 blocks, and in sight, wherever the crosshair goes. It charges for 15 drone ticks, purple to yellow, then deals the damage of the tier's sword (copper 5, iron 6, diamond 7, netherite 8) and starts charging again. Each discharge answers with an `attack` event naming the `entity` and whether it was `killed`. On a hunt or guard it only locks on to the job's prey (`state.job.prey`), flown by hand on any mob, never on players or drones. A beam on anything else, or on nothing, gets an `attack_failed` event with the `reason`. The hit is a mob attack from the drone, so the mob turns on it the way mobs go after a player's wolf that bit them.
 - `slot` (0 to 26) selects the inventory slot `place` uses.
 - `block` (optional) names the block `place` puts down instead of `slot`. With the config's `materials` set to `inventory` the drone swaps the first stack of it into slot 0 and places from there, and fails with `out of <block>` when it has none. With `unlimited` it places the block without using items.
 - `transfer` moves a stack between the drone and the open container: `{"from": "drone" | "container", "slot": i}` plus optional `toSlot` (default: first slot that fits, the way a shift-click merges) and `count` (default: the whole stack).
 - An action holds for every tick of a `step` and, in realtime mode, until the next `act`. `place`, `open`, `close`, and `transfer` fire once, on the first tick, `break` and `attack` hold.
 
-A lockstep `step` that used a tool answers after the server has applied it, and its frame shows the changed blocks.
+A lockstep `step` that used a tool answers after the server has applied it, and its frame shows the changed blocks. Hunts and follows keep the world running between steps, so an episode can end after a step's frame went out. The next `step` then gets the end frame instead of acting, and a `step` after that gets an error until a `reset`.
 
 ### Observation (binary frame)
 
@@ -124,6 +124,7 @@ Header:
     "wrecked": false,
     "collisions": 0,
     "droneCollisions": 0,
+    "turnReversals": 0,
     "metrics": [1]
   },
   "action": { "move": [1, 0, 0], "look": [0, 0], "tool": "break", "slot": 0, "transfer": null },
@@ -178,8 +179,9 @@ data/<task>/<episode_id>/
   depth/000000.f32   raw little-endian float32, height x width
   mask/000000.png    16-bit grayscale PNG
   state/000000.png   16-bit grayscale PNG, when recorded
-  log.jsonl
 ```
+
+Recordings are training data only. An episode's log lines are in the mod's session log, each tagged with its `episode`.
 
 Step `n` pairs the frame captured before action `n` with action `n`. The last step has `action: null` and carries the terminal frame. `pilot` is `bridge` or `keyboard`, and `client` names the bridge client that flew a `bridge` episode, such as `mcdrone-env`.
 
@@ -191,7 +193,7 @@ Step `n` pairs the frame captured before action `n` with action `n`. The last st
 
 ## Tasks
 
-`reset` options for every task: `task` (default the config's `task`), `terrain` (`flat`, `rough`, or `cave`), `radius` (arena half-width, default 12), `obstacles` (pillars, default 0), `targets` (dig_block 1, mine_and_deliver 3, hunt_mobs 4 hostile mobs), `size` (structure or deposit side for the arenas below that build one, 3 to 16, default 5), `perception` (`vision` or `scan`, default the config's `perception`, see Perception), `maxSteps`, `fleet` (see Fleets).
+`reset` options for every task: `task` (default the config's `task`), `terrain` (`flat`, `rough`, or `cave`), `radius` (arena half-width, default 12), `obstacles` (pillars, default 0), `targets` (dig_block 1, mine_and_deliver 3, hunt_mobs 4 hostile mobs), `prey` (hunt_mobs and guard_region: `hostile`, `all`, or mob kinds as a list or separated by commas such as `cow, minecraft:zombie`), `size` (structure or deposit side for the arenas below that build one, 3 to 16, default 5), `perception` (`vision` or `scan`, default the config's `perception`, see Perception), `maxSteps`, `fleet` (see Fleets).
 
 ### Fleets
 
@@ -199,6 +201,7 @@ Several drones can share one training arena, each with its own task. Each drone'
 
 ### Arena
 
+- An arena is built around `arenaX`, `arenaZ` (config), set by the first arena to where the player stood. It clears everything in its footprint, so when a drone's home station or a drone outside the arena is inside the footprint, widened by 4 blocks, the arena moves 112 blocks east until it doesn't, and the config keeps the new spot.
 - Flat arenas are light gray concrete. Rough arenas add seeded rolling hills up to 4 blocks high, grass with stone and gravel patches, and a few oak trees.
 - Cave arenas have a stone floor with hills up to 3 blocks high, stone walls on the arena edge, and an uneven stone roof 7 to 10 blocks over the base floor, always at least 6 air blocks above the ground. Glowstone in the roof lights the room. Dripstone stalactites hang to 2 or 3 blocks over the floor, and a pillar taller than the room joins the roof.
 - Pillars are stone brick, 1x1 or 2x2, 3 to 9 blocks tall, placed at least 2 blocks from every goal and the spawn. Fewer than requested can appear if the arena runs out of room.
@@ -206,7 +209,7 @@ Several drones can share one training arena, each with its own task. Each drone'
 
 ### Reward
 
-Every task subtracts `collisionPenalty` (config, default 0.05) on ticks the drone collides, and `damagePenalty` (config, default 0.5) for each point of health a mob takes. A wrecked drone ends the episode with `outOfBoundsPenalty` subtracted and `wrecked` set, `episode.damage` is the health lost. Tool tasks reward approaching their current goal down to about 3 blocks, the rest comes from progress below. Success adds 10.
+Every task subtracts `collisionPenalty` (config, default 0.05) on ticks the drone collides, `damagePenalty` (config, default 0.5) for each point of health a mob takes, and `jitterPenalty` (config, default 0.1) each time the yaw or pitch turn reverses direction at 1 degree a tick or more, counted in `episode.turnReversals`. A wrecked drone ends the episode with `outOfBoundsPenalty` subtracted and `wrecked` set, `episode.damage` is the health lost. Tool tasks reward approaching their current goal down to about 3 blocks, the rest comes from progress below. Success adds 10.
 
 | Task | Goal | Metrics | Progress reward | Default maxSteps |
 | --- | --- | --- | --- | --- |
@@ -221,10 +224,11 @@ Every task subtracts `collisionPenalty` (config, default 0.05) on ticks the dron
 | mine_deposit | mine every coal ore in a `size`-wide stone deposit, most of it buried | as mining jobs | as mining jobs | 20000 |
 | gather_build | copy a structure, mining every block it needs from a stone deposit first, starting with an empty inventory | as copy jobs | as copy jobs | 20000 |
 | patrol_area | fly over every patrol cell of the arena floor | as patrol jobs | +10 per round, spread over its cells | 1500 |
-| hunt_mobs | kill the arena's hostile mobs, leaving its animals alone | as guard jobs | +10 for all of them, spread over the kills | 3000 |
+| hunt_mobs | kill the arena's prey, leaving its other mobs alone | as guard jobs | +10 for all of them, spread over the kills | 3000 |
 | goto_point | get within 1.5 blocks of a point given as coordinates, nothing marks it | none | distance closed | 600 |
 | find_block | get within 1.5 blocks of the one block of the named kind, among 3 look-alikes of other kinds | none | distance closed to the nearest one | 1500 |
 | follow_mob | stay 2 to 5 blocks from a villager wandering inside the arena's wall for 200 ticks | none | gap to that band closed, +10 spread over the 200 ticks | 1500 |
+| dock_station | dock on a charging station on the ground or a pedestal up to 2 high, given as a `return_home` job | none | distance closed to the spot over it | 600 |
 
 ## Jobs
 
@@ -238,14 +242,14 @@ Jobs run in the player's own world: nothing is built or cleared, the drone keeps
 | `harvest_region` | `region`, `crop` (such as `minecraft:wheat`) | every ripe crop harvested and every farmland cell planted |
 | `return_home` | none | the drone docked on its home charging station |
 | `patrol_region` | `region`, `rounds` (1 to 20, default 1) | every patrol cell of the region flown over, `rounds` times |
-| `guard_region` | `region`, `rounds` | the patrol's rounds flown and no hostile mob left in the region |
+| `guard_region` | `region`, `rounds`, `prey` (default `hostile`) | the patrol's rounds flown and none of its prey left in the region |
 | `fly_to` | `dest` (`[x, y, z]` or a saved region's name) | the drone within 1.5 blocks of the point |
 | `seek_block` | `region`, `block` (such as `bricks`) | the drone within 1.5 blocks of a block of that kind in the region, found with its camera |
 | `follow_player` | none | none, the drone keeps 2 to 5 blocks from the player until the job is stopped, within 48 blocks across of where it started |
 
 Boxes and points fall back to the player's selection, set with the tablet or `select`. `dest` is where the target's lowest corner lands, a saved region's lowest corner when it names one, and the copy keeps the source's orientation. With `gather` the drone mines the blocks it needs from that box before building. It can't overlap the copy's source or the destination, and is at most 32 blocks per side. Copy and build boxes are at most 16 blocks per side mining regions 32, and patrol regions 64, every box is within 96 blocks of the player, and only the singleplayer host can start jobs. During a job the server refuses drone breaks and places outside the job's box with a `break_failed` or `place_failed` event, so a copy only touches its destination and gather box, and a mining job never digs out of its region.
 
-`state.job` is `{ "kind": "copy" | "build", "source": [x0, y0, z0, x1, y1, z1], "schematic": "house.schem", "dest": [x0, y0, z0, x1, y1, z1], "gather": [x0, y0, z0, x1, y1, z1], "size": [w, h, l] }` with inclusive corners, `source` only for copies, `schematic` only for builds, and `gather` only when the drone mines its materials there. A mining job's is `{ "kind": "mine", "region": [x0, y0, z0, x1, y1, z1], "blocks": ["minecraft:coal_ore", "minecraft:iron_ore"] }`, a return home's `{ "kind": "return_home", "station": [x, y, z] }`, a fly-to's `{ "kind": "goto", "point": [x, y, z], "arrive": 1.5 }`, a seek's `{ "kind": "find", "block": "minecraft:bricks", "region": [x0, y0, z0, x1, y1, z1], "arrive": 1.5 }`, a follow's `{ "kind": "follow", "target": entityId, "near": 2.0, "far": 5.0, "ticks": 0 }` with the target's position in `state.followTarget` every step, the way a player's phone would share it, and a patrol's or guard's `{ "kind": "patrol", "region": [x0, y0, z0, x1, y1, z1], "rounds": 3, "hunt": true, "cells": [[x, z], ...], "visitRadius": 3.0 }`. The region splits into patrol cells about 8 blocks across, and a cell counts as flown over once the drone passes within `visitRadius` of its center, at any height. `hunt` is true for guards, which also kill hostile mobs. The drone finds them with its camera. Every job also carries `tier`, the drone's, and `unharvestable`, the ids of every block that tier breaks without a drop, read from the game's tool tags. A mining job leaves out kinds the drone's tier can't harvest and fails when that leaves none. The drone gets the boxes, never the copy's contents: in vision perception it reads those with its camera, see Perception. The geofence covers the job's boxes, the drone's starting point, and its home station when that's within 96 blocks of the player, plus 6 blocks around them.
+`state.job` is `{ "kind": "copy" | "build", "source": [x0, y0, z0, x1, y1, z1], "schematic": "house.schem", "dest": [x0, y0, z0, x1, y1, z1], "gather": [x0, y0, z0, x1, y1, z1], "size": [w, h, l] }` with inclusive corners, `source` only for copies, `schematic` only for builds, and `gather` only when the drone mines its materials there. A mining job's is `{ "kind": "mine", "region": [x0, y0, z0, x1, y1, z1], "blocks": ["minecraft:coal_ore", "minecraft:iron_ore"] }`, a return home's `{ "kind": "return_home", "station": [x, y, z] }`, a fly-to's `{ "kind": "goto", "point": [x, y, z], "arrive": 1.5 }`, a seek's `{ "kind": "find", "block": "minecraft:bricks", "region": [x0, y0, z0, x1, y1, z1], "arrive": 1.5 }`, a follow's `{ "kind": "follow", "target": entityId, "near": 2.0, "far": 5.0, "ticks": 0 }` with the target's position in `state.followTarget` every step, the way a player's phone would share it, and a patrol's or guard's `{ "kind": "patrol", "region": [x0, y0, z0, x1, y1, z1], "rounds": 3, "hunt": true, "prey": "hostile", "cells": [[x, z], ...], "visitRadius": 3.0 }`. The region splits into patrol cells about 8 blocks across, and a cell counts as flown over once the drone passes within `visitRadius` of its center, at any height. `hunt` is true for guards, which also kill their `prey`: `"hostile"`, `"all"`, or a list of mob kinds such as `["minecraft:cow"]`. The drone finds them with its camera. Every job also carries `tier`, the drone's, and `unharvestable`, the ids of every block that tier breaks without a drop, read from the game's tool tags. A mining job leaves out kinds the drone's tier can't harvest and fails when that leaves none. The drone gets the boxes, never the copy's contents: in vision perception it reads those with its camera, see Perception. The geofence covers the job's boxes, the drone's starting point, and its home station when that's within 96 blocks of the player, plus 6 blocks around them.
 
 Copy and build metrics are matching destination cells, non-air target blocks, and destination blocks that don't belong. Each match is worth 10 divided by the target's block count, each wrong block costs 1, and success needs every target block in place with nothing extra. Mining metrics are the blocks of the kind left and how many there were, each one mined is worth 10 divided by the starting count, and success is none left. Block properties such as stair facing don't count yet. A job's default `maxSteps` is 100000. A return home has no metrics, the client ends it as a success once the drone docks. Patrol and guard metrics are hostile mobs left in the region, mobs the drone killed, and hostile mobs in the region at the start, all 0 for a patrol. The client counts the cells and rounds from the drone's pose. A round is worth 10, spread over its cells, and each kill is worth 10 divided by the hostile mobs at the start (at least 1).
 
@@ -260,7 +264,7 @@ Drones work at once. A job that breaks or places blocks can't share a block with
 The config's `perception` picks how the drone learns what blocks a job involves.
 
 - `vision` (default): the drone gets the job's boxes and nothing else. It reads blocks with its camera, through a policy's own perception.
-- `scan` for a guard job or hunt arena: every observation lists the hostile mobs in the region as `state.mobs`, `[{ "entity": "minecraft:zombie", "pos": [x, y, z] }]`, the middle of each one's box. A patrol or guard writes no block scans.
+- `scan` for a guard job or hunt arena: every observation lists every mob in the region as `state.mobs`, the planner picks out its prey, `[{ "entity": "minecraft:zombie", "pos": [x, y, z] }]`, the middle of each one's box. A patrol or guard writes no block scans.
 - `scan`: when the job starts, the server reads each of the job's boxes straight from the world, the way WorldEdit copies, and writes them to `schematics/scans/<task>-<seed>-<box>.schem`. `state.job.scan` maps each box name (`source`, `dest`, `region`, `gather`) to its file, relative to the game's `schematics` folder. Every block is there, buried or not, as its full block state, such as `minecraft:wheat[age=7]`, including blocks a vision model doesn't know. The files are a snapshot of the job's start, the drone's own breaks and places are its to keep track of.
 
 ### Regions
@@ -297,7 +301,7 @@ Schematics are Sponge Schematic files (`.schem`), the format WorldEdit uses. The
 ### patrol_area, hunt_mobs
 
 - The job's region is the arena floor inside its edge, from the floor up 16 blocks. patrol_area flies one round.
-- hunt_mobs walls the arena in with two blocks of gray concrete on its border, raised to clear the ground beside it, and spawns `targets` hostile mobs (zombies, husks, skeletons with bows, and creepers) and 2 animals (cows, pigs, sheep, or chickens) on free cells. The zombies and skeletons wear an unbreakable leather cap, the arena's sun would burn them. The mobs keep their AI and wander, and fight back once hit. Lockstep leaves the world running during a hunt or a follow, the target has to move. The next arena on the spot removes any left. Its job has `hunt` and no rounds to fly, success is every one of its hostile mobs dead. It needs a difficulty above peaceful.
+- hunt_mobs walls the arena in with two blocks of gray concrete on its border, raised to clear the ground beside it, and spawns `targets` hostile mobs (zombies, husks, skeletons with bows, and creepers) and 3 animals (cows, pigs, sheep, or chickens) on free cells. Without a `prey` option the arena picks one: half its hunts go after the hostile mobs, a fifth after every mob, and the rest after one kind it spawned. A named kind it didn't spawn gets one. The zombies and skeletons wear an unbreakable leather cap, the arena's sun would burn them. The mobs keep their AI and wander, and fight back once hit. Lockstep leaves the world running during a hunt or a follow, the target has to move. The next arena on the spot removes any left. Its job has `hunt` and no rounds to fly, success is all of its prey dead. Its metrics count the prey. It needs a difficulty above peaceful.
 
 ### copy_build, schematic_build, mine_deposit, gather_build
 

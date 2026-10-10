@@ -1,8 +1,8 @@
 """
-What a scripted expert is allowed to know: its own pose plus what its camera has seen.
-Each frame's depth and semantic mask are back-projected into world points. A hit below the camera raises that
-column's known floor, a hit above it lowers the column's known ceiling, and target blocks (ore, chests, the marker,
-the pad) are remembered once seen. Other drones block their column for a few frames, they move.
+The free space the drone flies through, part of its perception core (perception.core). Each frame's depth and
+semantic mask are back-projected into world points. A hit below the camera raises that column's known floor, a hit
+above it lowers the column's known ceiling, and a ray that crosses a cell shows it empty. Other drones block their
+column for a few frames, they move. Which block fills each cell is the voxel memory's (perception.memory).
 Nothing here reads the arena layout
 """
 
@@ -37,29 +37,17 @@ def perceivable(state: dict) -> dict:
 
 
 class WorldMap:
-    """Column heights and landmarks built from the drone's own frames"""
+    """Column heights, ceilings, cells seen empty, and other drones, built from the drone's own frames"""
 
     def __init__(self, mask_ids: dict) -> None:
-        names = mask_ids["blocks"]
-        self.id_of = {name: i + 1 for i, name in enumerate(names)}
         self.entity_base = mask_ids["entityBase"]
         self.drone_id = drone_mask_id(mask_ids)
         # columns another drone was seen in, as (frame, lowest block, highest block)
         self.drones: dict[tuple[int, int], tuple[int, int, int]] = {}
         self.frame = 0
-        self.landmark_ids = {
-            "coal_ore": self.id_of.get("minecraft:coal_ore"),
-            "chest": self.id_of.get("minecraft:chest"),
-            "marker": self.id_of.get("mcdrone:marker"),
-            "pad": self.id_of.get("minecraft:lime_concrete"),
-        }
         self.heights: dict[tuple[int, int], float] = {}
         # lowest block seen above the camera per column, a roof, an overhang, or the upper part of a pillar
         self.ceilings: dict[tuple[int, int], float] = {}
-        # votes per block for each landmark kind, a grazing ray can land a hit in the block below
-        self.votes: dict[str, dict[tuple[int, int, int], int]] = {k: {} for k in self.landmark_ids}
-        self.strict: set[str] = set()
-        self.last_hits: tuple | None = None
         # how many rays crossed each block on the way to something else, evidence the block is empty
         self.air: dict[tuple[int, int, int], int] = {}
         # the drone's feet height while planning, columns below it are passable
@@ -68,16 +56,6 @@ class WorldMap:
         self.ignore: tuple[int, int] | None = None
         # the task's geofence as x0, y0, z0, x1, y1, z1, the planner treats everything outside as blocked
         self.fence: list[float] | None = None
-
-    def track(self, name: str, block: str, strict: bool = False) -> None:
-        """
-        Start counting votes for another block kind, it has to be in mask_ids.
-        Strict kinds only count hits well inside a face, for telling apart blocks stacked right next to each other
-        """
-        self.landmark_ids[name] = self.id_of.get(block)
-        self.votes.setdefault(name, {})
-        if strict:
-            self.strict.add(name)
 
     # planner interface, see expert.plan and expert.waypoint
     @property
@@ -137,38 +115,14 @@ class WorldMap:
                 cell = (math.floor(x + dx), math.floor(z + dz))
                 self.ceilings[cell] = min(self.ceilings.get(cell, math.inf), float(math.floor(y + 0.05)))
 
-    def landmarks(self, name: str) -> list[tuple[int, int, int]]:
-        """One block per column for a landmark kind, the height that collected the most hits"""
-        votes = self.votes[name]
-        best: dict[tuple[int, int], tuple[int, tuple[int, int, int]]] = {}
-        for cell, n in votes.items():
-            key = (cell[0], cell[2])
-            if key not in best or n > best[key][0]:
-                best[key] = (n, cell)
-        # drop a cell when a neighbor got far more hits, edge noise leaves faint copies next to the real block
-        kept = []
-        for n, cell in best.values():
-            strongest = max(
-                (votes.get((cell[0] + dx, cell[1] + dy, cell[2] + dz), 0) for dx in (-1, 0, 1) for dy in (-1, 0, 1) for dz in (-1, 0, 1)),
-                default=0,
-            )
-            if n >= 0.3 * strongest:
-                kept.append(cell)
-        return kept
-
     def forget(self, cell: tuple[int, int, int]) -> None:
         """A mined block is gone, its column drops back to whatever is under it once seen again"""
-        # neighbors go too, they hold the edge-noise copies of the same block
-        for votes in self.votes.values():
-            for key in [k for k in votes if max(abs(k[i] - cell[i]) for i in range(3)) <= 1]:
-                del votes[key]
         if self.heights.get((cell[0], cell[2]), -math.inf) >= cell[1] + 1:
             self.heights[(cell[0], cell[2])] = cell[1]
         if self.ceilings.get((cell[0], cell[2])) == cell[1]:
             del self.ceilings[(cell[0], cell[2])]
 
-    def update(self, state: dict, depth: np.ndarray, mask: np.ndarray, depth_max: float, pixels: np.ndarray | None = None) -> None:
-        """pixels is any per-pixel value to keep with each hit in last_hits, such as the reader's ripe probability"""
+    def update(self, state: dict, depth: np.ndarray, mask: np.ndarray, depth_max: float) -> None:
         self.frame += 1
         ids_full = mask.astype(np.int64)
         view = backproject(state, depth, depth_max, valid=ids_full != 0)
@@ -181,8 +135,6 @@ class WorldMap:
         # entities aren't terrain
         block = ids < self.entity_base
         eye, inside, interior, outside, ids = view.eye, view.inside[block], view.interior[block], view.outside[block], ids[block]
-        # the block, mask id, and per-pixel value of every sampled hit
-        self.last_hits = (inside, ids, pixels[np.ix_(view.rows, view.cols)][view.hit][block] if pixels is not None else None)
 
         overhead = inside[:, 1] + 0.5 > eye[1]
         floor = inside[~overhead]
@@ -210,24 +162,6 @@ class WorldMap:
             # a ray through a remembered ceiling, such as one marked when a climb stalled against a wall, saw it isn't there
             if self.ceilings.get((key[0], key[2])) == key[1]:
                 del self.ceilings[(key[0], key[2])]
-        if self.strict:
-            for name in self.strict:
-                votes = self.votes[name]
-                for (x, y, z), n in zip(crossed, crossed_n):
-                    key = (int(x), int(y), int(z))
-                    if key in votes:
-                        votes[key] -= int(n)
-                        if votes[key] <= 0:
-                            del votes[key]
-        for name, block_id in self.landmark_ids.items():
-            if block_id is None:
-                continue
-            chosen = (ids == block_id) & interior if name in self.strict else ids == block_id
-            cells, counts = np.unique(inside[chosen], axis=0, return_counts=True)
-            votes = self.votes[name]
-            for (x, y, z), n in zip(cells, counts):
-                key = (int(x), int(y), int(z))
-                votes[key] = votes.get(key, 0) + int(n)
 
 
 @dataclass

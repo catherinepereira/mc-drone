@@ -11,10 +11,10 @@ import math
 import threading
 from pathlib import Path
 
-from .experts.base import tool_action
-from .paths import DATA
+from .scripted.base import tool_action
+from .paths import CHECKPOINTS
 
-SAVE = DATA / "energy.json"
+SAVE = CHECKPOINTS / "energy.json"
 # blocks a tick the drone covers cruising, the first guess at what a flight costs before any trip home is measured
 CRUISE_SPEED = 0.25
 # the flight home is budgeted at this many times its estimate
@@ -47,10 +47,18 @@ def station_top(station) -> tuple[float, float, float]:
     return (station[0] + 0.5, station[1] + 1.0, station[2] + 0.5)
 
 
-def fly_home(planner, state: dict, station) -> dict:
-    """The planner's flight to a little above the station's top, where the drone docks"""
+def dock_intent(state: dict, station) -> dict:
+    """A goto goal for the camera a little above the station's top, where the drone docks"""
     x, y, z = station_top(station)
-    move, _ = planner.fly(state, (x, y + DOCK_HOVER + state["camera"]["eyeHeight"], z), standoff=0.0)
+    return {"mode": "goto", "aim": (x, y + DOCK_HOVER + state["camera"]["eyeHeight"], z), "standoff": 0.0, "hover": 0.0}
+
+
+def fly_home(planner, state: dict, station) -> dict:
+    """The battery keeper's flight home, by the planner's home pilot or its scripted controller"""
+    intent = dock_intent(state, station)
+    if planner.home_pilot is not None:
+        return planner.home_pilot.fly(state, planner.obs, intent)
+    move, _ = planner.fly(state, intent["aim"], standoff=0.0)
     return tool_action(move)
 
 
@@ -103,7 +111,7 @@ class EnergyModel:
 
 class BatteryKeeper:
     """
-    A planner's errand (see HonestExpert.errand). At a job's start it charges first when the learned cost of the job
+    A planner's errand (see Planner.errand). At a job's start it charges first when the learned cost of the job
     won't fit in the charge, and mid-job it heads home once the charge barely covers the flight there and the reserve.
     Docked, it waits for a full charge, then hands the drone back to the planner
     """

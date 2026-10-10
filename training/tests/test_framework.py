@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 import torch
 
-from drone_model.experts.base import tool_action
+from drone_model.scripted.base import tool_action
 from drone_model.framework.data import pad_episodes
 from drone_model.framework.registry import POLICIES
 from drone_model.framework.spec import Step
@@ -37,3 +37,22 @@ def test_every_policy_records_trains_and_acts(name):
     out["loss"].backward()
     action = spec.agent(model.eval(), MASK_IDS).act(step())
     assert np.asarray(action["move"]).shape == (5,)
+
+
+def test_reversals_cost_a_turn_that_flips_and_not_one_that_holds():
+    import torch
+
+    from drone_model.framework.data import CONTINUES
+    from drone_model.framework.spec import PolicySpec
+    from drone_model.framework.train import reversals
+
+    class Turns(PolicySpec):
+        def look(self, model, batch):
+            return batch["turn"]
+
+    # left, right, right, then a new episode starting left
+    batch = {"turn": torch.tensor([[-0.5, 0.0], [0.5, 0.0], [0.5, 0.0], [-0.5, 0.0]]), CONTINUES: torch.tensor([True, True, False, True])}
+    # one flip among the two pairs inside an episode, the episode boundary doesn't count
+    assert abs(float(reversals(Turns(), None, batch)) - 0.125) < 1e-6
+    held = {"turn": torch.tensor([[0.5, 0.2]]), CONTINUES: torch.tensor([True])}
+    assert float(reversals(Turns(), None, held, {"turn": torch.tensor([[0.3, 0.1]])})) == 0.0

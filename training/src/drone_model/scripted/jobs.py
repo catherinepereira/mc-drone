@@ -1,5 +1,5 @@
 """
-Planners for the player's jobs. Each one sees through the block reader into a VoxelMemory and picks the next goal from
+Planners for the player's jobs. Each one reads the drone's voxel memory (perception.core) and picks the next goal from
 it: a view to look at part of a box, a block to break, or a cell to place a block into. The scripted flight under
 work_on and view carries the goals out, or the learned cell skill does when one is attached
 """
@@ -12,13 +12,13 @@ from pathlib import Path
 
 import numpy as np
 
-from ..energy import fly_home
-from ..perception.memory import AIR, MIN_VOTES, Cell, VoxelMemory
-from ..perception.reader import CLASSES, INDEX, OTHER, SKY
+from ..energy import dock_intent
+from ..perception.memory import AIR, MIN_VOTES, base_name
+from ..perception.reader import CLASSES, INDEX
 from .arena import HarvestExpert, make_expert
 from .goto import GotoPlanner
 from .patrol import PatrolPlanner
-from .base import SURVEY_LIMIT, TOP_LEAN, TOP_VIA_HEIGHT, VIA_DIST, HonestExpert, center, tool_action
+from .base import SURVEY_LIMIT, TOP_LEAN, TOP_VIA_HEIGHT, VIA_DIST, Planner, center, tool_action
 
 VIEW_SPACING = 4.0
 VIEW_DIST = 4.0
@@ -27,8 +27,6 @@ GAP_VIEW_DIST = 2.2
 # a viewpoint is where the camera goes, the drone's feet are about this far below it
 VIA_EYE = 0.2
 CARRIED_SHARE = 0.25
-# a scanned cell counts as this many reads, far more than frames add
-SCAN_VOTES = 1000.0
 # the age a crop is ripe at, where it isn't 7
 RIPE_AGE = {"minecraft:beetroots": 3}
 # a mining job digs a block if at least this share of its reads said the job's block, even when most said something else
@@ -57,11 +55,6 @@ def neighbors(cell) -> list[tuple[int, int, int]]:
     return [(x + 1, y, z), (x - 1, y, z), (x, y + 1, z), (x, y - 1, z), (x, y, z + 1), (x, y, z - 1)]
 
 
-def base_name(label: str) -> str:
-    """A memory label or block state as a block name: no ripeness, no properties"""
-    return label.split(" ")[0].split("[")[0]
-
-
 def block_age(block: str) -> int | None:
     """The age property of a block state such as minecraft:wheat[age=7], None without one"""
     for prop in block.partition("[")[2].rstrip("]").split(","):
@@ -69,23 +62,6 @@ def block_age(block: str) -> int | None:
         if key == "age":
             return int(value)
     return None
-
-
-def read_scans(job: dict, schematics: Path | None) -> dict[str, dict[tuple[int, int, int], str]]:
-    """Block states of each box the server scanned for the job, by box name and then by cell"""
-    if not job.get("scan"):
-        return {}
-    from mcdrone.schematic import load
-
-    if schematics is None:
-        raise ValueError("a scanned job needs the schematics folder, pass --schematics")
-    out = {}
-    for key, rel in job["scan"].items():
-        schematic = load(schematics / rel)
-        x0, y0, z0 = job[key][:3]
-        w, h, l = schematic.size
-        out[key] = {(x0 + x, y0 + y, z0 + z): schematic.get(x, y, z) for x in range(w) for y in range(h) for z in range(l)}
-    return out
 
 
 def spaced(lo: int, hi: int) -> list[float]:
@@ -115,18 +91,12 @@ def box_views(box) -> list[tuple[tuple, tuple]]:
     return views
 
 
-class JobPlanner(HonestExpert):
+class JobPlanner(Planner):
     """Surveys boxes view by view, nearest view first, and keeps what the reader makes of them in memory"""
 
-    def __init__(self, mask_ids: dict, depth_max: float = 64.0, reader=None, schematics: Path | None = None) -> None:
-        if reader is None:
-            raise ValueError("job planners read blocks with the block reader, pass one")
-        super().__init__(mask_ids, depth_max, reader)
+    def __init__(self, mask_ids: dict, depth_max: float = 64.0, reader=None, schematics: Path | None = None, core=None) -> None:
+        super().__init__(mask_ids, depth_max, reader, core=core, schematics=schematics)
         self.schematics = schematics
-        self.memory = VoxelMemory()
-        # scan perception: exact block names of the job's boxes read from the world, and which boxes they cover
-        self.scanned: dict[tuple[int, int, int], str] = {}
-        self.scanned_boxes: set[str] | None = None
         self.views: list[tuple[tuple, tuple]] | None = None
         self.view_steps = 0
         self.dwell = 0
@@ -139,23 +109,18 @@ class JobPlanner(HonestExpert):
         # blocks the drone's tier breaks without a drop, the server lists them with the job
         self.unharvestable: frozenset[str] = frozenset()
 
-    def load_scans(self, job: dict) -> None:
-        """
-        Loads the boxes the server scanned, once. Each cell goes into memory as a certain read, so everything that works
-        from memory works the same, and its exact name into scanned
-        """
-        if self.scanned_boxes is not None:
-            return
+    def note_job(self, job: dict) -> None:
+        """Takes what the job tells the planner beyond its boxes: the blocks the drone's tier breaks without a drop"""
         self.unharvestable = frozenset(job.get("unharvestable", ()))
-        self.scanned_boxes = set()
-        for key, cells in read_scans(job, self.schematics).items():
-            for cell, block in cells.items():
-                name = base_name(block)
-                self.scanned[cell] = name
-                votes = self.memory.cells.setdefault(cell, Cell()).votes
-                votes[:] = 0
-                votes[SKY if name == AIR else INDEX.get(name, OTHER)] = SCAN_VOTES
-            self.scanned_boxes.add(key)
+
+    @property
+    def scanned(self) -> dict[tuple[int, int, int], str]:
+        """Scan perception: the block name of every cell of the job's scanned boxes, which the core read into memory"""
+        return self.core.scanned
+
+    @property
+    def scanned_boxes(self) -> set[str]:
+        return set(self.core.scans)
 
     def scanned_in(self, box, wanted) -> list[tuple[int, int, int]]:
         """Scanned cells in box holding one of the wanted blocks and not dug out since"""
@@ -370,8 +335,8 @@ class BuildPlanner(JobPlanner):
     each block against a face of a block already there
     """
 
-    def __init__(self, mask_ids: dict, depth_max: float = 64.0, reader=None, schematics: Path | None = None) -> None:
-        super().__init__(mask_ids, depth_max, reader, schematics)
+    def __init__(self, mask_ids: dict, depth_max: float = 64.0, reader=None, schematics: Path | None = None, core=None) -> None:
+        super().__init__(mask_ids, depth_max, reader, schematics, core=core)
         self.plan: dict[tuple[int, int, int], str] | None = None
         self.read_schematic = None
         self.site_seen = False
@@ -414,7 +379,7 @@ class BuildPlanner(JobPlanner):
                 elif "in the way" not in reason:
                     # the server refused the cell, a safe region or outside the job
                     self.skipped.add(self.target)
-        self.load_scans(job)
+        self.note_job(job)
         if self.plan is None:
             if job["kind"] == "build":
                 self.plan = self.load_plan(job)
@@ -464,6 +429,7 @@ class BuildPlanner(JobPlanner):
         for cell in self.recheck:
             if cell in self.memory.cells:
                 self.memory.cells[cell].votes[:] = 0
+                self.memory.touch(cell)
         self.views = self.close_views(self.recheck, self.source)
         if not self.recheck:
             self.out_of.add(block)
@@ -659,8 +625,8 @@ class MinePlanner(JobPlanner):
     trenches through the region, which uncovers buried ones, and breaks those as they come into view
     """
 
-    def __init__(self, mask_ids: dict, depth_max: float = 64.0, reader=None, schematics: Path | None = None) -> None:
-        super().__init__(mask_ids, depth_max, reader, schematics)
+    def __init__(self, mask_ids: dict, depth_max: float = 64.0, reader=None, schematics: Path | None = None, core=None) -> None:
+        super().__init__(mask_ids, depth_max, reader, schematics, core=core)
         self.empty_surveys = 0
         self.walls_checked = False
 
@@ -668,7 +634,7 @@ class MinePlanner(JobPlanner):
         job = state["job"]
         blocks = set(job["blocks"])
         self.note_breaks(state)
-        self.load_scans(job)
+        self.note_job(job)
         if "region" in self.scanned_boxes:
             # the scan knows every block of the kinds, buried or not, any block the game has
             cell = self.committed(state, self.scanned_in(job["region"], blocks))
@@ -726,17 +692,18 @@ class HarvestPlanner(HarvestExpert):
     without looking at them first
     """
 
-    def __init__(self, mask_ids: dict, depth_max: float = 64.0, reader=None, schematics: Path | None = None) -> None:
-        super().__init__(mask_ids, depth_max, reader)
+    def __init__(self, mask_ids: dict, depth_max: float = 64.0, reader=None, schematics: Path | None = None, core=None) -> None:
+        super().__init__(mask_ids, depth_max, reader, core=core, schematics=schematics)
         self.schematics = schematics
-        # block states of the field by cell, empty in vision perception
-        self.field_scan: dict[tuple[int, int, int], str] | None = None
+
+    @property
+    def field_scan(self) -> dict[tuple[int, int, int], str]:
+        """Block states of the field by cell, read by the core, empty in vision perception"""
+        return self.core.scans.get("region", {})
 
     def decide(self, state: dict) -> dict:
-        if self.field_scan is None:
-            self.field_scan = read_scans(state["job"], self.schematics).get("region", {})
-            if self.field_scan:
-                self.views = []
+        if self.field_scan and self.views is None:
+            self.views = []
         return super().decide(state)
 
     def ripe_cells(self, state: dict) -> list[tuple[int, int, int]]:
@@ -771,29 +738,33 @@ class HarvestPlanner(HarvestExpert):
         return tool_action([0, 0, 0, 0, 0])
 
 
-class DockPlanner(HonestExpert):
+class DockPlanner(Planner):
     """Flies back to the charging station, the job ends once the drone docks on it"""
 
     def decide(self, state: dict) -> dict:
-        return fly_home(self, state, state["job"]["station"])
+        # named as a goto goal, so the goto policy learns docking and flies it
+        self.intent = dock_intent(state, state["job"]["station"])
+        move, _ = self.fly(state, self.intent["aim"], standoff=0.0)
+        return tool_action(move)
 
 
-def episode_expert(task: str, job: dict | None, mask_ids: dict, reader, schematics: Path | None = None) -> HonestExpert:
-    """The job planner for an episode that hands the drone a job, the planners need the block reader, else the task's expert"""
-    if job and reader is not None:
-        return make_planner(job, mask_ids, reader, schematics)
-    return make_expert(task, mask_ids, reader=reader)
+def episode_expert(task: str, job: dict | None, mask_ids: dict, reader, schematics: Path | None = None, core=None) -> Planner:
+    """The job planner for an episode that hands the drone a job, else the task's expert"""
+    if job:
+        return make_planner(job, mask_ids, reader, schematics, core=core)
+    return make_expert(task, mask_ids, reader=reader, core=core)
 
 
-def make_planner(job: dict, mask_ids: dict, reader, schematics: Path | None = None) -> HonestExpert:
+def make_planner(job: dict, mask_ids: dict, reader, schematics: Path | None = None, core=None) -> Planner:
+    """The planner for a job, reading the drone's core when given one"""
     if job["kind"] == "return_home":
-        return DockPlanner(mask_ids, reader=reader)
+        return DockPlanner(mask_ids, reader=reader, core=core)
     if job["kind"] in ("copy", "build"):
-        return BuildPlanner(mask_ids, reader=reader, schematics=schematics)
+        return BuildPlanner(mask_ids, reader=reader, schematics=schematics, core=core)
     if job["kind"] == "mine":
-        return MinePlanner(mask_ids, reader=reader, schematics=schematics)
+        return MinePlanner(mask_ids, reader=reader, schematics=schematics, core=core)
     if job["kind"] == "patrol":
-        return PatrolPlanner(mask_ids, reader=reader)
+        return PatrolPlanner(mask_ids, reader=reader, core=core)
     if job["kind"] in ("goto", "find", "follow"):
-        return GotoPlanner(mask_ids, reader=reader)
-    return HarvestPlanner(mask_ids, reader=reader, schematics=schematics)
+        return GotoPlanner(mask_ids, reader=reader, core=core)
+    return HarvestPlanner(mask_ids, reader=reader, schematics=schematics, core=core)

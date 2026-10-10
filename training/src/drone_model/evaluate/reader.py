@@ -1,8 +1,8 @@
 """
-How well the block reader and voxel memory read a build: the build expert flies its survey of the reference,
-every frame goes through the reader into memory, and the remembered box is compared cell by cell with the real one.
-The expert only steers the camera here, what ends up in memory comes from the reader alone.
-The memory is published to the dashboard as it fills
+How well the block reader and voxel memory read a build: the build expert flies its survey of the reference on the
+mod's mask, every frame also goes through a perception core with the reader, and the core's remembered box is compared
+cell by cell with the real one. The expert only steers the camera here, what ends up in the core comes from the reader
+alone. The memory is published to the dashboard as it fills
 """
 
 from __future__ import annotations
@@ -16,9 +16,10 @@ import numpy as np
 from mcdrone import DroneEnv
 
 from ..paths import CHECKPOINTS, REPORTS
-from ..perception.memory import VoxelMemory
+from ..perception.core import DroneCore
 from ..perception.reader import Reader
-from ..experts.arena import make_expert
+from ..perception.worldmap import perceivable
+from ..scripted.jobs import episode_expert
 
 EVAL_SEED = 100_000
 
@@ -37,8 +38,10 @@ def main() -> None:
     try:
         for i in range(args.episodes):
             obs, info = env.reset(seed=EVAL_SEED + i)
-            expert = make_expert("replicate_build", env.client.mask_ids)
-            memory = VoxelMemory()
+            # steered on the mod's mask, the core under test reads the same frames with the reader
+            expert = episode_expert("replicate_build", info["state"]["job"], env.client.mask_ids, None)
+            core = DroneCore(env.client.mask_ids, reader=reader)
+            memory = core.memory
             arena = info["state"]["arena"]
             rx, ry, rz = arena["referenceBase"]
             lo, hi = (rx - 1, ry + 1, rz - 1), (rx + 1, ry + 3, rz + 1)
@@ -46,9 +49,8 @@ def main() -> None:
             focus = [lo[0] - 1, ry, lo[2] - 1, hi[0] + 1, hi[1], hi[2] + 1]
             snapshot = []
             while expert.plan is None:
-                classes, ripe = reader.read(obs["rgb"], obs["depth"])
-                changes = memory.observe(info["state"], obs["depth"], classes, ripe)
-                env.client.publish_memory(memory.step, [c.to_json() for c in changes], snapshot=snapshot if memory.step == 1 else None, focus=focus)
+                core.see(perceivable(info["state"]), obs)
+                env.client.publish_memory(memory.step, [c.to_json() for c in core.changes], snapshot=snapshot if memory.step == 1 else None, focus=focus)
                 obs, _, terminated, truncated, info = env.step(expert.act(info["state"], obs))
                 if terminated or truncated:
                     break

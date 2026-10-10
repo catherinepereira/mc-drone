@@ -1,6 +1,6 @@
 """
 The block reader: a small U-Net that looks at the camera image and depth and says, per pixel, which block it is,
-whether a crop is ripe, and whether a mob is hostile or passive. It is trained on the mod's mask and state streams and
+whether a crop is ripe, and which kind of mob it is. It is trained on the mod's mask and state streams and
 needs neither when it runs
 """
 
@@ -15,6 +15,18 @@ from ..torch_utils import load_weights, pick_device
 from .blocks import BUILD_PALETTE
 
 SKY, OTHER = 0, 1
+# the mobs the reader tells apart, by the mask's entity names: the hunt arenas' hostile and passive kinds and follow_mob's villager
+MOB_KINDS = (
+    "minecraft:zombie",
+    "minecraft:husk",
+    "minecraft:skeleton",
+    "minecraft:creeper",
+    "minecraft:cow",
+    "minecraft:pig",
+    "minecraft:sheep",
+    "minecraft:chicken",
+    "minecraft:villager",
+)
 # what the reader tells apart: the build palette, the arenas' bases and floors, terrain, what jobs work with, and mobs
 CLASSES = (
     "<sky>",
@@ -43,14 +55,10 @@ CLASSES = (
     "minecraft:glowstone",
     "minecraft:dripstone_block",
     "mcdrone:marker",
-    "<hostile>",
-    "<passive>",
+    *MOB_KINDS,
 )
 INDEX = {name: i for i, name in enumerate(CLASSES)}
-HOSTILE, PASSIVE = INDEX["<hostile>"], INDEX["<passive>"]
-# mask ids that stand for the mob classes when the reader's output goes where the mask stream would
-HOSTILE_STAND_IN = "minecraft:zombie"
-PASSIVE_STAND_IN = "minecraft:cow"
+MOBS = np.asarray([INDEX[name] for name in MOB_KINDS], dtype=np.uint8)
 CROPS = ("minecraft:wheat", "minecraft:carrots", "minecraft:potatoes", "minecraft:beetroots")
 # ripe label for pixels that aren't a crop, left out of the ripeness loss
 NOT_CROP = 255
@@ -81,19 +89,12 @@ def state_tables(state_names: list[str]) -> tuple[np.ndarray, np.ndarray]:
     return classes, ripe
 
 
-def entity_table(entities: list[str], categories: dict[str, str]) -> np.ndarray:
+def entity_table(entities: list[str]) -> np.ndarray:
     """
-    Reader class per entity in a mask_ids entities list: hostile for the monster category, passive for other mobs,
-    SKY for everything else (items, drones, players), which the state stream never labeled as a block either
+    Reader class per entity in a mask_ids entities list: the mob's own class for MOB_KINDS, SKY for everything else
+    (items, drones, players, mobs the arenas never spawn), which the state stream never labeled as a block either
     """
-    table = np.full(len(entities), SKY, dtype=np.uint8)
-    for j, name in enumerate(entities):
-        category = categories.get(name, "misc")
-        if category == "monster":
-            table[j] = HOSTILE
-        elif category != "misc":
-            table[j] = PASSIVE
-    return table
+    return np.asarray([INDEX[name] if name in MOB_KINDS else SKY for name in entities], dtype=np.uint8)
 
 
 def block(cin: int, cout: int) -> nn.Sequential:
@@ -139,11 +140,23 @@ def mask_lut(mask_ids: dict) -> np.ndarray:
     """Reader classes to the mod's mask ids, so code written for the mask stream can run on the reader's output"""
     id_of = {name: i + 1 for i, name in enumerate(mask_ids["blocks"])}
     base = mask_ids["entityBase"]
-    id_of[CLASSES[HOSTILE]] = base + mask_ids["entities"].index(HOSTILE_STAND_IN)
-    id_of[CLASSES[PASSIVE]] = base + mask_ids["entities"].index(PASSIVE_STAND_IN)
+    id_of.update({name: base + j for j, name in enumerate(mask_ids["entities"]) if name in MOB_KINDS})
     # some solid block for "<other>", it still counts as something in the way
     other = id_of.get("minecraft:bedrock", 1)
     return np.asarray([0, other, *(id_of.get(name, other) for name in CLASSES[2:])], dtype=np.uint16)
+
+
+def class_lut(mask_ids: dict) -> np.ndarray:
+    """The mod's mask ids to reader classes, so ground-truth frames go into the voxel memory like the reader's output"""
+    base = mask_ids["entityBase"]
+    lut = np.full(base + len(mask_ids["entities"]), OTHER, dtype=np.uint8)
+    lut[0] = SKY
+    for i, name in enumerate(mask_ids["blocks"]):
+        lut[i + 1] = INDEX.get(name, OTHER)
+    # mobs to their own classes, items and drones to nothing
+    for j, name in enumerate(mask_ids["entities"]):
+        lut[base + j] = INDEX.get(name, SKY)
+    return lut
 
 
 class Reader:

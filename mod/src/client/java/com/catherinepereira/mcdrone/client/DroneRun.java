@@ -24,6 +24,8 @@ public final class DroneRun {
 	// the job that just ended, the next tick starts the drone's next queued job or sends it home
 	@Nullable TaskKind finishedJob;
 	boolean finishedJobSucceeded;
+	// whether the client got the frame of the episode's end, a live world can end it between lockstep steps
+	boolean terminalSent;
 	// the bridge client flying this drone, null when nobody is
 	@Nullable Session session;
 	private DroneAction bridgeAction = DroneAction.ZERO;

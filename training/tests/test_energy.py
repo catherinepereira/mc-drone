@@ -10,6 +10,7 @@ class FakePlanner:
 
     def __init__(self) -> None:
         self.flown_to = None
+        self.home_pilot = None
 
     def fly(self, state, point, standoff):
         self.flown_to = point

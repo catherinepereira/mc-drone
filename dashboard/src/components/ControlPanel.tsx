@@ -17,6 +17,7 @@ const TASKS = [
   "goto_point",
   "find_block",
   "follow_mob",
+  "dock_station",
 ];
 
 // WASD moves, space and shift climb and descend, arrow keys turn, F held mines, V held hits a hostile mob, G places,

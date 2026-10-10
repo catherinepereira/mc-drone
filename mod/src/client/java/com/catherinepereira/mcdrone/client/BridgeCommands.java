@@ -264,7 +264,11 @@ final class BridgeCommands {
 			return;
 		}
 		if (run.task.episodeId() != null && !run.task.active()) {
-			session.error("episode is done, send reset", id);
+			if (run.terminalSent) {
+				session.error("episode is done, send reset", id);
+			} else {
+				this.runtime.sendTerminal(run, session, id);
+			}
 			return;
 		}
 		int ticks = msg.has("ticks") ? Math.clamp(msg.get("ticks").getAsInt(), 1, 100) : 1;

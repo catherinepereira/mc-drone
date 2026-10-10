@@ -1,5 +1,7 @@
 package com.catherinepereira.mcdrone.task;
 
+import net.minecraft.resources.Identifier;
+import java.util.Set;
 import com.catherinepereira.mcdrone.ModContent;
 import com.catherinepereira.mcdrone.entity.DroneEntity;
 import com.catherinepereira.mcdrone.entity.DroneItem;
@@ -51,6 +53,11 @@ import org.jspecify.annotations.Nullable;
  */
 public final class TrainingArenas {
 	public static final int HEIGHT = 16;
+	// a moved arena's next spot, past the widest footprint (radius 48 and its border)
+	private static final int SITE_STEP = 112;
+	private static final int SITE_TRIES = 16;
+	// blocks kept between the footprint and a station or drone
+	private static final int SITE_MARGIN = 4;
 	public static final double MIN_SPAWN_DIST = 8.0;
 	public static final double KEY_SPAWN_DIST = 5.0;
 	public static final double CLEARANCE = 2.0;
@@ -59,10 +66,10 @@ public final class TrainingArenas {
 	private static final List<Item> TRANSFER_ITEMS = List.of(
 		Items.COBBLESTONE, Items.OAK_LOG, Items.IRON_INGOT, Items.WHEAT, Items.REDSTONE, Items.COAL, Items.BRICK, Items.STRING
 	);
-	// a hunt's mobs: the hostile ones the drone hunts, and animals it has to leave alone
+	// a hunt's mobs, hostile and passive, the episode's prey picks which of them the drone hunts and which it leaves alone
 	private static final List<EntityType<? extends Mob>> HOSTILE_MOBS = List.of(EntityTypes.ZOMBIE, EntityTypes.HUSK, EntityTypes.SKELETON, EntityTypes.CREEPER);
 	private static final List<EntityType<? extends Mob>> PASSIVE_MOBS = List.of(EntityTypes.COW, EntityTypes.PIG, EntityTypes.SHEEP, EntityTypes.CHICKEN);
-	private static final int PASSIVE_COUNT = 2;
+	private static final int PASSIVE_COUNT = 3;
 	// marks the mobs an arena spawned, the next arena on the spot removes them
 	private static final String ARENA_TAG = "mcdrone_arena";
 	// find_block's target and look-alikes, kinds the block reader knows and the arena's terrain never makes
@@ -110,8 +117,9 @@ public final class TrainingArenas {
 		}
 		// every drone's sites take about the room of an arena of their own
 		radius = Math.clamp((int) Math.round(radius * Math.sqrt(reqs.size())), 4, 48);
-		int ox = first.hasOrigin() ? first.originX() : player.getBlockX();
-		int oz = first.hasOrigin() ? first.originZ() : player.getBlockZ();
+		int[] site = clearSite(level, existing, first.hasOrigin() ? first.originX() : player.getBlockX(), first.hasOrigin() ? first.originZ() : player.getBlockZ(), radius);
+		int ox = site[0];
+		int oz = site[1];
 		int floorY = findFloor(level, ox, oz);
 		BlockPos origin = new BlockPos(ox, floorY, oz);
 		Random rng = new Random(first.seed());
@@ -153,6 +161,28 @@ public final class TrainingArenas {
 			ready.add(startDrone(level, player, m));
 		}
 		return ready;
+	}
+
+	/**
+	 * The arena clears everything in its footprint, so it steps east by SITE_STEP until no drone's home station and no
+	 * drone outside this arena is inside the footprint
+	 */
+	private static int[] clearSite(ServerLevel level, List<DroneEntity> members, int ox, int oz, int radius) {
+		int edge = radius + 2 + SITE_MARGIN;
+		for (int tries = 0; tries < SITE_TRIES; tries++, ox += SITE_STEP) {
+			int x = ox;
+			int z = oz;
+			boolean taken = !level.getEntities(ModContent.DRONE, d -> {
+				BlockPos home = d.home();
+				boolean homeInside = home != null && Math.abs(home.getX() - x) <= edge && Math.abs(home.getZ() - z) <= edge;
+				boolean droneInside = !members.contains(d) && Math.abs(d.getBlockX() - x) <= edge && Math.abs(d.getBlockZ() - z) <= edge;
+				return homeInside || droneInside;
+			}).isEmpty();
+			if (!taken) {
+				return new int[] {x, z};
+			}
+		}
+		throw new IllegalArgumentException("no arena site clear of drones and their stations within " + SITE_TRIES * SITE_STEP + " blocks east");
 	}
 
 	private static boolean isStructure(TaskKind kind) {
@@ -256,13 +286,27 @@ public final class TrainingArenas {
 			case PATROL_AREA, HUNT_MOBS -> {
 				// the whole floor, its middle first among the key points so pillars leave it clear
 				keyPoints.add(new Vec3(ox + 0.5, terrain.ground(ox, oz) + 1.5, oz + 0.5));
-				List<UUID> mobs = null;
+				List<UUID> quarry = null;
+				Prey prey = Prey.HOSTILE;
 				if (kind == TaskKind.HUNT_MOBS) {
 					wallIn(level, terrain, origin, radius);
-					mobs = spawnMobs(level, rng, record, keyPoints, terrain, Math.clamp(req.targets(), 1, 8));
+					List<Mob> mobs = spawnMobs(level, rng, record, keyPoints, terrain, Math.clamp(req.targets(), 1, 8));
+					prey = req.prey().isBlank() ? pickPrey(rng, mobs) : Prey.parse(req.prey());
+					// named kinds the arena didn't happen to spawn get one each
+					for (String name : prey.kinds()) {
+						if (mobs.stream().noneMatch(prey::matches)) {
+							EntityType<?> type = BuiltInRegistries.ENTITY_TYPE.getValue(Identifier.parse(name));
+							Mob mob = spawnMob(level, rng, record, keyPoints, terrain, type);
+							if (mob != null) {
+								mobs.add(mob);
+							}
+						}
+					}
+					quarry = mobs.stream().filter(prey::matches).map(Mob::getUUID).toList();
 				}
-				int half = radius - 1;
-				record.job = PatrolJob.arena(new BlockPos(ox - half, origin.getY(), oz - half), new BlockPos(ox + half, origin.getY() + HEIGHT - 1, oz + half), mobs);
+				// a hunt's region is everything inside its wall, a mob pressed against the wall is still prey
+				int half = kind == TaskKind.HUNT_MOBS ? radius : radius - 1;
+				record.job = PatrolJob.arena(new BlockPos(ox - half, origin.getY(), oz - half), new BlockPos(ox + half, origin.getY() + HEIGHT - 1, oz + half), prey, quarry);
 			}
 			case GOTO_POINT -> {
 				// a point in the air, given as coordinates, nothing marks it
@@ -271,6 +315,19 @@ public final class TrainingArenas {
 				BlockPos point = new BlockPos(cell.getX(), y, cell.getZ());
 				record.job = GotoJob.point(point);
 				keyPoints.add(Vec3.atCenterOf(point));
+			}
+			case DOCK_STATION -> {
+				// a charging station on the ground or a pedestal up to 2 high, the job names where it is
+				BlockPos base = freeCell(rng, record, keyPoints, terrain, 1, 4.0);
+				int height = rng.nextInt(3);
+				for (int h = 0; h < height; h++) {
+					level.setBlock(base.above(h), Blocks.STONE.defaultBlockState(), FLAGS);
+				}
+				BlockPos station = base.above(height);
+				level.setBlock(station, ModContent.CHARGING_STATION.defaultBlockState(), FLAGS);
+				record.targets.add(station);
+				record.job = new DockJob(station);
+				keyPoints.add(Vec3.atCenterOf(station.above()));
 			}
 			case FIND_BLOCK -> {
 				// the named block and look-alikes of other kinds on stone pedestals 0 to 2 high
@@ -336,42 +393,59 @@ public final class TrainingArenas {
 		return new Member(req, rng, existing, record, spawn, yaw, BlockPos.containing(primary), stock);
 	}
 
-	/**
-	 * hostiles hostile mobs and PASSIVE_COUNT animals on free cells, each one a key point so pillars don't bury it.
-	 * Returns the hostile ones. Skeletons get a bow, and zombies and skeletons an unbreakable cap, the arena's sun would burn them
-	 */
-	private static List<UUID> spawnMobs(ServerLevel level, Random rng, ArenaRecord record, List<Vec3> keyPoints, Terrain terrain, int hostiles) {
+	/** hostiles hostile mobs and PASSIVE_COUNT animals on free cells, see spawnMob */
+	private static List<Mob> spawnMobs(ServerLevel level, Random rng, ArenaRecord record, List<Vec3> keyPoints, Terrain terrain, int hostiles) {
 		if (level.getDifficulty() == Difficulty.PEACEFUL) {
 			throw new IllegalArgumentException("hunt_mobs needs a difficulty above peaceful, where hostile mobs vanish");
 		}
-		List<UUID> quarry = new ArrayList<>();
+		List<Mob> mobs = new ArrayList<>();
 		for (int i = 0; i < hostiles + PASSIVE_COUNT; i++) {
-			boolean hostile = i < hostiles;
-			List<EntityType<? extends Mob>> kinds = hostile ? HOSTILE_MOBS : PASSIVE_MOBS;
-			Mob mob = kinds.get(rng.nextInt(kinds.size())).create(level, EntitySpawnReason.EVENT);
-			if (mob == null) {
-				continue;
-			}
-			BlockPos cell = freeCell(rng, record, keyPoints, terrain, 1, 3.0);
-			mob.snapTo(cell.getX() + 0.5, cell.getY(), cell.getZ() + 0.5, rng.nextFloat() * 360.0F, 0.0F);
-			mob.setPersistenceRequired();
-			mob.addTag(ARENA_TAG);
-			if (mob.getType() == EntityTypes.SKELETON) {
-				mob.setItemSlot(EquipmentSlot.MAINHAND, new ItemStack(Items.BOW));
-			}
-			if (mob.getType() == EntityTypes.ZOMBIE || mob.getType() == EntityTypes.SKELETON) {
-				ItemStack cap = new ItemStack(Items.LEATHER_HELMET);
-				cap.set(DataComponents.UNBREAKABLE, Unit.INSTANCE);
-				mob.setItemSlot(EquipmentSlot.HEAD, cap);
-				mob.setDropChance(EquipmentSlot.HEAD, 0.0F);
-			}
-			level.addFreshEntity(mob);
-			keyPoints.add(Vec3.atCenterOf(cell));
-			if (hostile) {
-				quarry.add(mob.getUUID());
+			List<EntityType<? extends Mob>> kinds = i < hostiles ? HOSTILE_MOBS : PASSIVE_MOBS;
+			Mob mob = spawnMob(level, rng, record, keyPoints, terrain, kinds.get(rng.nextInt(kinds.size())));
+			if (mob != null) {
+				mobs.add(mob);
 			}
 		}
-		return quarry;
+		return mobs;
+	}
+
+	/** Half the hunts go after the hostile mobs, a fifth after every mob, and the rest after one kind the arena spawned */
+	private static Prey pickPrey(Random rng, List<Mob> mobs) {
+		int roll = rng.nextInt(10);
+		if (roll < 5 || mobs.isEmpty()) {
+			return Prey.HOSTILE;
+		}
+		if (roll < 7) {
+			return Prey.ALL;
+		}
+		Mob pick = mobs.get(rng.nextInt(mobs.size()));
+		return Prey.of(Set.of(BuiltInRegistries.ENTITY_TYPE.getKey(pick.getType()).toString()));
+	}
+
+	/**
+	 * One mob of type on a free cell, a key point so pillars don't bury it, or null when the type isn't a mob.
+	 * Skeletons get a bow, and zombies and skeletons an unbreakable cap, the arena's sun would burn them
+	 */
+	private static @Nullable Mob spawnMob(ServerLevel level, Random rng, ArenaRecord record, List<Vec3> keyPoints, Terrain terrain, EntityType<?> type) {
+		if (!(type.create(level, EntitySpawnReason.EVENT) instanceof Mob mob)) {
+			return null;
+		}
+		BlockPos cell = freeCell(rng, record, keyPoints, terrain, 1, 3.0);
+		mob.snapTo(cell.getX() + 0.5, cell.getY(), cell.getZ() + 0.5, rng.nextFloat() * 360.0F, 0.0F);
+		mob.setPersistenceRequired();
+		mob.addTag(ARENA_TAG);
+		if (mob.getType() == EntityTypes.SKELETON) {
+			mob.setItemSlot(EquipmentSlot.MAINHAND, new ItemStack(Items.BOW));
+		}
+		if (mob.getType() == EntityTypes.ZOMBIE || mob.getType() == EntityTypes.SKELETON) {
+			ItemStack cap = new ItemStack(Items.LEATHER_HELMET);
+			cap.set(DataComponents.UNBREAKABLE, Unit.INSTANCE);
+			mob.setItemSlot(EquipmentSlot.HEAD, cap);
+			mob.setDropChance(EquipmentSlot.HEAD, 0.0F);
+		}
+		level.addFreshEntity(mob);
+		keyPoints.add(Vec3.atCenterOf(cell));
+		return mob;
 	}
 
 	// a two-block gray concrete wall on the arena's border keeps a hunt's mobs in, raised to clear the ground beside it

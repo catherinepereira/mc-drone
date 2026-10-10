@@ -31,6 +31,8 @@ public final class Config {
 	public float maxSpeed = 0.4F;
 	public float maxVerticalSpeed = 0.3F;
 	public float smoothing = 0.35F;
+	// how far the turn rate moves toward the commanded one each tick, as smoothing does for velocity
+	public float turnSmoothing = 0.35F;
 	public float maxLookPerTick = 15.0F;
 	public int resetSettleTicks = 10;
 	public int autoResetTicks = 20;
@@ -46,6 +48,8 @@ public final class Config {
 	public float outOfBoundsPenalty = 10.0F;
 	// reward lost per point of health a mob takes off the drone, a drone has 20
 	public float damagePenalty = 0.5F;
+	// reward lost each time the drone's turn reverses direction, so back-and-forth turning costs
+	public float jitterPenalty = 0.1F;
 	// how far the drone's range sensors reach, ahead and below, see StateJson
 	public float sensorRange = 4.0F;
 	// "inventory" places from the drone's stacks, "unlimited" places any named block without using items
@@ -58,6 +62,8 @@ public final class Config {
 	public Integer arenaZ;
 	public String logLevel = "info";
 	public List<String> mutedEvents = new ArrayList<>(List.of("action"));
+	// session logs older than this many days are removed when the game starts, 0 keeps them all
+	public int logRetentionDays = 7;
 
 	private transient Path file;
 
@@ -125,6 +131,8 @@ public final class Config {
 		this.radius = Math.clamp(this.radius, 4, 48);
 		this.maxSteps = Math.clamp(this.maxSteps, 10, 100000);
 		this.sensorRange = Math.clamp(this.sensorRange, 0.5F, 16.0F);
+		// at 0 the drone could never turn
+		this.turnSmoothing = Math.clamp(this.turnSmoothing, 0.05F, 1.0F);
 		if (this.streams == null) {
 			this.streams = new ArrayList<>(List.of("rgb", "depth", "mask"));
 		}
@@ -136,6 +144,7 @@ public final class Config {
 		if (!"unlimited".equals(this.materials)) {
 			this.materials = "inventory";
 		}
+		this.logRetentionDays = Math.max(0, this.logRetentionDays);
 		if (this.mutedEvents == null) {
 			this.mutedEvents = new ArrayList<>();
 		}

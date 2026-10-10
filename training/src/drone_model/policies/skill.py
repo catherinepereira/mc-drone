@@ -91,7 +91,7 @@ def frame(obs: dict) -> tuple[np.ndarray, np.ndarray]:
 
 
 class SkillAgent(Agent):
-    """A trained SkillPolicy, behind the experts' skill hook or flying its teacher's goals in the framework"""
+    """A trained SkillPolicy, flying a planner's goals in the brain or its teacher's in the framework"""
 
     def __init__(self, model: SkillPolicy) -> None:
         self.model = model
@@ -111,7 +111,7 @@ class SkillAgent(Agent):
 
     @torch.no_grad()
     def fly(self, state: dict, obs: dict, intent: dict) -> dict:
-        from ..experts.base import tool_action
+        from ..scripted.base import tool_action
 
         rgb, depth = frame(obs)
         tensors = [
@@ -132,12 +132,13 @@ class SkillSpec(PolicySpec):
 
     name = "skill"
     stride = 2
+    smoothness = 0.2
 
     def model(self) -> nn.Module:
         return SkillPolicy()
 
     def record(self, step: Step) -> dict[str, np.ndarray] | None:
-        from ..experts.base import TOOLS
+        from ..scripted.base import TOOLS
 
         intent = step.teacher.intent if step.teacher is not None else None
         if intent is None:
@@ -161,22 +162,9 @@ class SkillSpec(PolicySpec):
         precision = (pred & fired).sum() / pred.sum().clamp(min=1)
         return {"loss": move_loss + fire_loss, "move": move_loss, "fire": fire_loss, "fire_recall": recall, "fire_precision": precision}
 
+    def look(self, model: nn.Module, batch: dict[str, torch.Tensor]) -> torch.Tensor:
+        return model(batch["rgb"], batch["depth"], batch["state"], batch["goal"])[0][:, 3:5]
+
     def agent(self, model: nn.Module, mask_ids: dict) -> Agent:
         return SkillAgent(model)
 
-
-class SkillHook:
-    """The planner's skill hook: the planner names the goal, the skill flies it"""
-
-    def __init__(self, agent: SkillAgent) -> None:
-        self.agent = agent
-
-    def act(self, state: dict, obs: dict, intent: dict) -> dict:
-        return self.agent.fly(state, obs, intent)
-
-
-def with_skill(expert, checkpoint):
-    """Hands an expert's flying, aiming, and firing to a trained skill, its planner keeps choosing the goals"""
-    if checkpoint is not None:
-        expert.skill = SkillHook(SkillAgent.load(checkpoint))
-    return expert

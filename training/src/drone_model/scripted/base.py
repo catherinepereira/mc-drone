@@ -1,6 +1,6 @@
 """
-What every scripted expert shares: the action format, aim and viewpoint geometry, and HonestExpert, which flies to goals
-from the drone's own pose and what its camera has shown (see perception.worldmap.WorldMap)
+What every scripted planner and expert shares: the action format, aim and viewpoint geometry, and Planner, which reads
+the drone's perception core (perception.core) and flies to goals with the scripted controller
 """
 
 from __future__ import annotations
@@ -9,8 +9,8 @@ import math
 
 import numpy as np
 
-from ..perception.reader import mask_lut
-from ..perception.worldmap import WorldMap, perceivable
+from ..perception.core import DroneCore
+from ..perception.worldmap import perceivable
 from .navigate import waypoint
 
 TOOLS = ("none", "break", "place", "open", "close", "attack")
@@ -39,6 +39,8 @@ VIEW_APPROACH = 1.5
 WORK_LIMIT = 150
 # a front range reading this close while stopped is a block in the way
 BUMP_RANGE = 0.15
+# how far under the geofence's top the drone climbs at most
+BOUNDS_GAP = 1.5
 # frames a survey holds its aim on each view, and steps before it moves on from a view it can't reach
 SURVEY_DWELL = 4
 SURVEY_LIMIT = 90
@@ -106,28 +108,30 @@ def carried(state: dict, items: set[str] | None = None) -> list[int]:
     return [i for i, (name, count) in enumerate(state.get("inventory", [])) if count > 0 and (items is None or name in items)]
 
 
-class HonestExpert:
-    """Shared exploring, mapping, and flying. Subclasses decide what to do with what has been seen"""
+class Planner:
+    """
+    Searching, the scripted controller, and the goal each step for a learned pilot to fly. Every frame goes through the
+    drone's perception core first, subclasses decide the next goal from its memory, map, and mobs
+    """
 
-    def __init__(self, mask_ids: dict, depth_max: float = 64.0, reader=None) -> None:
+    def __init__(self, mask_ids: dict, depth_max: float = 64.0, reader=None, core: DroneCore | None = None, schematics=None) -> None:
         """
-        With a reader (a drone_model.perception.reader.Reader) the expert sees only what the block reader makes of the camera
-        image and depth, without one it reads the mod's mask stream, which is ground truth
+        core is the drone's perception, which it keeps across jobs. Without one the expert gets a core of its own, seeing
+        through reader (a drone_model.perception.reader.Reader) or, with none, the mod's mask stream, which is ground truth
         """
-        self.map = WorldMap(mask_ids)
+        self.core = core if core is not None else DroneCore(mask_ids, depth_max, reader, schematics)
+        self.map = self.core.map
+        self.memory = self.core.memory
+        self.mobs = self.core.mobs
         self.depth_max = depth_max
-        self.reader = reader
+        self.reader = self.core.reader
         # what the planner wants this step, {"mode": "view" | "break" | "place", "aim": point, "via": point or None},
         # recorded as the goal for training the cell skill
         self.intent: dict | None = None
-        # a learned controller (drone_model.policies.skill.SkillAgent) that flies, aims, and fires in place of the scripted one
-        self.skill = None
-        # a drone_model.perception.memory.VoxelMemory the reader's output goes into, and the cells that changed this step
-        self.memory = None
-        self.changes: list = []
-        self.reader_lut = mask_lut(mask_ids) if reader is not None else None
-        # the reader's class per pixel for the current frame
-        self.classes: np.ndarray | None = None
+        # the learned policy (an agent with fly(state, obs, intent)) that flies every goal the planner names in place of the
+        # scripted controller, and the one that flies home to charge
+        self.pilot = None
+        self.home_pilot = None
         self.spin_left = SPIN_TICKS
         self.home: tuple[float, float] | None = None
         self.visited: list[tuple[float, float]] = []
@@ -153,14 +157,7 @@ class HonestExpert:
         self.map.fence = self.bounds
         if self.home is None:
             self.home = (state["pos"][0], state["pos"][2])
-        if self.reader is not None:
-            classes, ripe = self.reader.read(obs["rgb"], obs["depth"])
-            obs = {**obs, "mask": self.reader_lut[classes], "ripe": ripe}
-            self.classes = classes
-            if self.memory is not None:
-                self.changes = self.memory.apply_events(state.get("events", [])) + self.memory.observe(state, obs["depth"], classes, ripe, self.depth_max)
-        self.obs = obs
-        self.map.update(state, obs["depth"], obs["mask"], self.depth_max, obs.get("ripe"))
+        self.obs = self.core.see(state, obs)
         pos = state["pos"]
         # told to climb and didn't rise for a few steps, there is a ceiling just over the drone's 0.4-block-tall body.
         # One stalled step proves nothing, a tool action can hold the drone for a tick
@@ -175,20 +172,30 @@ class HonestExpert:
             yaw = math.radians(state["yaw"])
             ahead = (math.floor(pos[0] - math.sin(yaw) * 0.8), math.floor(pos[2] + math.cos(yaw) * 0.8))
             self.map.heights[ahead] = max(self.map.heights.get(ahead, -math.inf), pos[1] + 1.0)
-        for event in state.get("events", []):
-            if event.get("type") == "break":
-                self.map.forget(tuple(event["pos"]))
         if self.unstick_left > 0:
             self.unstick_left -= 1
             self.last_pos = tuple(pos)
             self.last_up = 0.5
-            return tool_action([-0.6, 0.0, 0.5, 0.6, 0.0])
+            return tool_action([self.backing(state, 0.6), 0.0, 0.5, 0.6, 0.0])
         action = self.errand(state) if self.errand is not None else None
         if action is None:
             action = self.decide(state)
+            # the scripted controller still runs so the planner's own state moves on as it did when it taught the policy
+            if self.pilot is not None and self.intent is not None:
+                action = self.pilot.fly(state, self.obs, self.intent)
         self.watch_progress(state, action)
         self.last_up = float(action["move"][2])
         return action
+
+    @property
+    def classes(self) -> np.ndarray | None:
+        """The reader's class per pixel for the current frame"""
+        return self.core.classes
+
+    @property
+    def changes(self) -> list:
+        """The memory cells whose belief changed this step"""
+        return self.core.changes
 
     def watch_progress(self, state: dict, action: dict) -> None:
         """Back off and turn when told to move but the drone hasn't, it is pressed against something or boxed in"""
@@ -203,6 +210,17 @@ class HonestExpert:
 
     def decide(self, state: dict) -> dict:
         raise NotImplementedError
+
+    @staticmethod
+    def backing(state: dict, speed: float) -> float:
+        """Backward at speed, or not at all when the spot BOUNDS_GAP behind is outside the geofence the camera faces away from"""
+        bounds = state.get("bounds")
+        if not bounds:
+            return -speed
+        yaw = math.radians(state["yaw"])
+        x, z = state["pos"][0] + math.sin(yaw) * BOUNDS_GAP, state["pos"][2] - math.cos(yaw) * BOUNDS_GAP
+        inside = bounds[0] <= x <= bounds[3] and bounds[2] <= z <= bounds[5]
+        return -speed if inside else 0.0
 
     def cruise_y(self, state: dict, height: float = CRUISE_HEIGHT) -> float:
         pos = state["pos"]
@@ -247,8 +265,10 @@ class HonestExpert:
         move, _ = self.fly(state, (goal[0], cruise, goal[1]), standoff=0.0, look_down=SEARCH_PITCH)
         return tool_action(move)
 
-    def fly(self, state: dict, point, standoff: float, hover: float = 0.0, look_down: float | None = None, column=None) -> tuple[list, bool]:
-        """Steer toward point until within standoff blocks horizontally, keeping the camera hover above it"""
+    def fly(
+        self, state: dict, point, standoff: float, hover: float = 0.0, look_down: float | None = None, column=None, back_off: bool = True,
+    ) -> tuple[list, bool]:
+        """Steer toward point until within standoff blocks horizontally, keeping the camera hover above it. back_off backs away when closer"""
         pos = state["pos"]
         self.map.ignore = column
         self.map.fly_y = pos[1]
@@ -258,11 +278,13 @@ class HonestExpert:
             # travel above the local ground, hills between here and the target would block a low path
             eye_target = max(eye_target, self.cruise_y(state) + state["camera"]["eyeHeight"])
         eye_target = min(eye_target, self.map.headroom(pos[0], pos[2]) - CEILING_GAP + state["camera"]["eyeHeight"])
+        if state.get("bounds"):
+            eye_target = min(eye_target, state["bounds"][4] - BOUNDS_GAP + state["camera"]["eyeHeight"])
         up = float(np.clip(eye_target - (pos[1] + state["camera"]["eyeHeight"]), -1.0, 1.0))
         arrived = horizontal <= standoff + 0.3
         yaw_to_point, pitch_to_point, _ = aim_errors(state, point)
         if arrived:
-            forward = -0.3 if horizontal < standoff - 0.8 else 0.0
+            forward = self.backing(state, 0.3) if back_off and horizontal < standoff - 0.8 else 0.0
             move = [forward, 0.0, up, np.clip(yaw_to_point * TURN_GAIN, -1, 1), np.clip(pitch_to_point * TURN_GAIN, -1, 1)]
         else:
             tx, tz = waypoint(state, (point[0], point[2]), self.map)
@@ -299,8 +321,6 @@ class HonestExpert:
     def view(self, state: dict, move, via, aim) -> dict:
         """Go to via and look at aim, the scripted move or the learned skill's, recorded as a view intent"""
         self.intent = {"mode": "view", "aim": tuple(aim), "via": tuple(via), "block": None}
-        if self.skill is not None:
-            return self.skill.act(state, self.obs, self.intent)
         return tool_action(move)
 
     def dwell_on(self, state: dict, look) -> None:
@@ -335,8 +355,6 @@ class HonestExpert:
             self.working_on = None
         point = point or center(block)
         self.intent = {"mode": tool, "aim": tuple(point), "via": tuple(via) if via is not None else None, "block": place}
-        if self.skill is not None:
-            return self.skill.act(state, self.obs, self.intent)
         if via is not None:
             move, arrived = self.fly_to_view(state, via, point, column=(block[0], block[2]))
         else:
@@ -368,8 +386,9 @@ class HonestExpert:
         fire = on_target and (arrived or via is not None)
         return tool_action(move, tool if fire else "none", block=place)
 
-    def known(self, name: str) -> list[tuple]:
-        return [c for c in self.map.landmarks(name) if c not in self.unreachable]
+    def known(self, block: str) -> list[tuple]:
+        """Cells the memory has as the block kind, less the ones given up on"""
+        return [c for c in self.memory.cells_of(block) if c not in self.unreachable]
 
     def nearest(self, state: dict, cells) -> tuple | None:
         pos = state["pos"]

@@ -157,9 +157,10 @@ class DroneEnv(gym.Env):
         obs = self.client.step(self.to_protocol(action), ticks=self.ticks_per_step)
         self._last = obs
         episode = obs.episode or {}
-        # leaving the geofence ends the episode as a failure, so it terminates like success does
-        terminated = bool(episode.get("success")) or bool(episode.get("outOfBounds"))
-        return self._convert(obs), obs.reward, terminated, bool(episode.get("truncated")), self._info(obs)
+        # success, leaving the geofence, and a wrecked drone all terminate, only the step limit truncates
+        truncated = bool(episode.get("truncated"))
+        terminated = bool(episode.get("done")) and not truncated
+        return self._convert(obs), obs.reward, terminated, truncated, self._info(obs)
 
     def to_protocol(self, action: Any) -> dict[str, Any]:
         move = np.clip(np.asarray(action["move"] if self.tools else action, dtype=np.float32), -1.0, 1.0)

@@ -20,6 +20,9 @@ public final class DroneController {
 	private final Config config;
 	private int droneId = -1;
 	private Vec3 velocity = Vec3.ZERO;
+	// degrees per tick the drone turns at, eased toward the commanded look like velocity is toward the commanded move
+	private float yawRate;
+	private float pitchRate;
 	private boolean piloting;
 	private DroneAction lastAction = DroneAction.ZERO;
 	private boolean lastCollided;
@@ -51,6 +54,14 @@ public final class DroneController {
 		return this.velocity;
 	}
 
+	public float yawRate() {
+		return this.yawRate;
+	}
+
+	public float pitchRate() {
+		return this.pitchRate;
+	}
+
 	public boolean lastCollided() {
 		return this.lastCollided;
 	}
@@ -71,6 +82,8 @@ public final class DroneController {
 		}
 		this.droneId = drone.getId();
 		this.velocity = Vec3.ZERO;
+		this.yawRate = 0;
+		this.pitchRate = 0;
 		drone.clientControlled = true;
 	}
 
@@ -146,8 +159,10 @@ public final class DroneController {
 		if (drone == null) {
 			return false;
 		}
-		float yaw = drone.getYRot() + action.yaw();
-		float pitch = Mth.clamp(drone.getXRot() + action.pitch(), -90.0F, 90.0F);
+		this.yawRate += (action.yaw() - this.yawRate) * this.config.turnSmoothing;
+		this.pitchRate += (action.pitch() - this.pitchRate) * this.config.turnSmoothing;
+		float yaw = drone.getYRot() + this.yawRate;
+		float pitch = Mth.clamp(drone.getXRot() + this.pitchRate, -90.0F, 90.0F);
 		double rad = Math.toRadians(yaw);
 		double fx = -Math.sin(rad);
 		double fz = Math.cos(rad);
@@ -188,6 +203,8 @@ public final class DroneController {
 		drone.snapTo(x, y, z, yaw, pitch);
 		drone.setOldPosAndRot();
 		this.velocity = Vec3.ZERO;
+		this.yawRate = 0;
+		this.pitchRate = 0;
 	}
 
 	/** Makes the next rendered frame show the current pose exactly instead of interpolating from the last tick */

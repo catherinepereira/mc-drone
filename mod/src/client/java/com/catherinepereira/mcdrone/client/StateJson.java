@@ -15,7 +15,6 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.Mob;
-import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.phys.BlockHitResult;
@@ -121,11 +120,11 @@ public final class StateJson {
 		return new JsonPrimitive(Math.max(0.0, hit.getLocation().distanceTo(from) - inset));
 	}
 
-	// scan perception for hunts: every hostile mob in the region, where the client sees it
+	// scan perception for hunts: every mob in the region with its kind, where the client sees it, the planner picks out its prey
 	private static JsonArray mobs(Minecraft mc, BlockPos[] region) {
 		AABB box = new AABB(Vec3.atLowerCornerOf(region[0]), Vec3.atLowerCornerOf(region[1]).add(1.0, 1.0, 1.0));
 		JsonArray out = new JsonArray();
-		for (Mob mob : mc.level.getEntitiesOfClass(Mob.class, box, m -> m instanceof Enemy && m.isAlive())) {
+		for (Mob mob : mc.level.getEntitiesOfClass(Mob.class, box, Mob::isAlive)) {
 			JsonObject entry = new JsonObject();
 			entry.addProperty("entity", BuiltInRegistries.ENTITY_TYPE.getKey(mob.getType()).toString());
 			entry.add("pos", vec(mob.getBoundingBox().getCenter()));

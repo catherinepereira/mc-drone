@@ -11,7 +11,7 @@ from mcdrone import state_vector
 from torch import nn
 from torch.nn import functional as F
 
-from ..experts.base import tool_action
+from ..scripted.base import tool_action
 from ..framework.spec import Agent, PolicySpec, Step
 
 STATE_DIM = 6

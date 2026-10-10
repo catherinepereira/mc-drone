@@ -87,7 +87,7 @@ final class ResetFlow {
 		boolean hasOrigin = config.arenaX != null && config.arenaZ != null;
 		ResetTaskPayload request = new ResetTaskPayload(
 			this.pending.requestId(), kind.id, terrain, seed, radius, obstacles, targets, hasOrigin, hasOrigin ? config.arenaX : 0, hasOrigin ? config.arenaZ : 0,
-			region, subject, size, scan, tier, this.run.droneId()
+			region, subject, size, scan, tier, this.run.droneId(), options.has("prey") ? JobOptions.prey(options) : ""
 		);
 		if (fleet != null) {
 			String problem = kind.isJob() ? "a fleet shares a training arena, " + kind.id + " is a player job"
@@ -120,7 +120,8 @@ final class ResetFlow {
 			return;
 		}
 		Config config = this.runtime.config();
-		if (config.arenaX == null || config.arenaZ == null) {
+		// the first arena fixes the spot, and one that moved off a drone or its station keeps the new spot
+		if (config.arenaX == null || config.arenaZ == null || config.arenaX != payload.origin().getX() || config.arenaZ != payload.origin().getZ()) {
 			config.arenaX = payload.origin().getX();
 			config.arenaZ = payload.origin().getZ();
 			config.save();
@@ -167,10 +168,11 @@ final class ResetFlow {
 		JsonObject arena = JsonParser.parseString(ready.arena()).getAsJsonObject();
 		this.run.task.begin(
 			id, kind, pending.seed(), ready.marker(), arena, pending.maxSteps(), pending.successDist(), config.collisionPenalty, config.boundsPadding,
-			config.outOfBoundsPenalty, config.damagePenalty
+			config.outOfBoundsPenalty, config.damagePenalty, config.jitterPenalty
 		);
 		this.run.tools.reset();
 		this.run.selectedSlot = 0;
+		this.run.terminalSent = false;
 		this.runtime.syncFrozen();
 		if (this.run == this.runtime.active()) {
 			this.runtime.clearQueuedTools();

@@ -1,13 +1,17 @@
 """
-The drone brain: runs jobs with the block reader, a voxel memory, a job planner, and optionally the learned cell skill,
-and publishes the memory to the dashboard as it changes. A battery keeper flies the drone home to charge when it must,
+The drone brain: each drone has a perception core (perception.core: the block reader, the voxel memory, the world map,
+and the mob tracker) that it keeps across its jobs. A job's planner reads the core and names the goals, which the
+learned policies fly: the goto policy for getting somewhere and the flights home, the cell skill for everything else.
+It publishes the memory to the dashboard as it changes. A battery keeper flies the drone home to charge when it must,
 see energy.py. Every drone with a job gets its own worker, so the player's drones work at once
 
     python -m drone_model.brain                     run every job started in game or on the dashboard
     python -m drone_model.brain --task replicate_build --episodes 10    evaluate on training arenas
     python -m drone_model.brain --fleet replicate_build,harvest_crops --episodes 5    several drones, one shared arena
+    python -m drone_model.brain --task hunt_mobs --scripted    the scripted controller flies the goals, for comparison
 
-A copy job's read of its source box is also saved as a .schem in reports/
+A player's copy job also saves its read of the source box as a .schem in the game's schematics folder, where a build
+job can load it
 """
 
 from __future__ import annotations
@@ -21,10 +25,14 @@ from mcdrone import DroneClient, DroneEnv
 
 from .energy import BatteryKeeper, EnergyModel
 from .paths import CHECKPOINTS, REPORTS, SCHEMATICS
-from .experts.jobs import make_planner
+from .scripted.base import tool_action
+from .scripted.goto import GotoPlanner
+from .scripted.jobs import DockPlanner, make_planner
+from .framework.evaluate import outcome, prey_killed
+from .perception.core import DroneCore
 from .perception.reader import Reader
-from .policies.skill import with_skill
-from .experts.base import tool_action
+from .policies.goto import GotoAgent
+from .policies.skill import SkillAgent
 from .torch_utils import write_report
 
 EVAL_SEED = 100_000
@@ -35,7 +43,7 @@ IDLE_SECONDS = 20.0
 JOB_TASKS = (
     "copy_region", "build_schematic", "mine_region", "harvest_region", "return_home", "patrol_region", "guard_region", "fly_to", "seek_block",
     "follow_player", "replicate_build", "harvest_crops", "copy_build", "schematic_build", "mine_deposit", "gather_build", "patrol_area",
-    "hunt_mobs", "goto_point", "find_block", "follow_mob",
+    "hunt_mobs", "goto_point", "find_block", "follow_mob", "dock_station",
 )
 
 
@@ -48,23 +56,49 @@ def job_focus(job: dict) -> list[int] | None:
     return [min(b[i] for b in boxes) for i in range(3)] + [max(b[i] for b in boxes) for i in range(3, 6)]
 
 
-def run_job(env: DroneEnv, obs: dict, info: dict, reader: Reader, args, energy: EnergyModel) -> dict:
+def load_pilots(args) -> dict | None:
+    """The learned policies that fly the planners' goals, loaded once for every drone, None with --scripted"""
+    if args.scripted:
+        return None
+    for checkpoint in (args.skill, args.goto):
+        if not checkpoint.exists():
+            raise SystemExit(f"no checkpoint at {checkpoint}, train it or pass --scripted")
+    return {"skill": SkillAgent.load(args.skill), "goto": GotoAgent.load(args.goto)}
+
+
+def attach(planner, pilots: dict | None):
+    if pilots is not None:
+        planner.pilot = pilots["goto"] if isinstance(planner, (GotoPlanner, DockPlanner)) else pilots["skill"]
+        planner.home_pilot = pilots["goto"]
+    return planner
+
+
+def flown_by(args) -> str:
+    return "scripted" if args.scripted else f"{args.skill.name}, {args.goto.name}"
+
+
+def run_job(env: DroneEnv, obs: dict, info: dict, reader: Reader, args, energy: EnergyModel, core: DroneCore | None = None) -> dict:
+    """Flies one job, reading core when the drone keeps one across jobs, else a core of the job's own"""
     job = info["state"]["job"]
-    planner = with_skill(make_planner(job, env.client.mask_ids, reader, args.schematics), args.skill)
+    planner = attach(make_planner(job, env.client.mask_ids, reader, args.schematics, core=core), args.pilots)
     keeper = BatteryKeeper(planner, energy, job)
     planner.errand = keeper
     focus = job_focus(job)
-    saved = False
+    # an arena's read of its source box has no use once the episode ends
+    saved = info["episode"].get("task") != "copy_region"
+    first = True
     # an arena can be done before its first step
     terminated, truncated = bool(info["episode"].get("done")), False
     while not (terminated or truncated):
         action = planner.act(info["state"], obs)
-        step = planner.memory.step if planner.memory is not None else 0
-        if step == 1 or planner.changes:
-            # an empty snapshot at step 1 starts a new history on the dashboard
+        step = planner.memory.step
+        if first or planner.changes:
+            # an empty snapshot at a core's first step starts a new history on the dashboard, a later job of the same drone
+            # carries on the history and moves the focus to its own boxes
             env.client.publish_memory(step, [c.to_json() for c in planner.changes], snapshot=[] if step == 1 else None, focus=focus)
+            first = False
         if getattr(planner, "read_schematic", None) is not None and not saved:
-            out = REPORTS / "reads" / f"{datetime.now():%Y%m%d-%H%M%S}.schem"
+            out = args.schematics / f"read-{datetime.now():%Y%m%d-%H%M%S}.schem"
             planner.read_schematic.save(out)
             print(f"read the source box, saved {out}", flush=True)
             saved = True
@@ -88,6 +122,7 @@ def fly(drone: int, name: str, reader: Reader, args, energy: EnergyModel) -> Non
     """
     env = DroneEnv(tools=True, streams=("rgb", "depth"), drone=drone)
     last = None
+    core = None
     try:
         while True:
             def started(s: dict) -> bool:
@@ -102,7 +137,9 @@ def fly(drone: int, name: str, reader: Reader, args, energy: EnergyModel) -> Non
             last = episode["id"]
             print(f"{name}: running {episode['task']}", flush=True)
             obs, _, _, _, info = env.step(tool_action([0, 0, 0, 0, 0]))
-            result = run_job(env, obs, info, reader, args, energy)
+            if core is None:
+                core = DroneCore(env.client.mask_ids, reader=reader, schematics=args.schematics)
+            result = run_job(env, obs, info, reader, args, energy, core)
             print(f"{name}: {episode['task']} {'done' if result.get('success') else 'stopped'} after {result.get('step')} steps", flush=True)
     finally:
         env.close()
@@ -149,18 +186,20 @@ def evaluate(env: DroneEnv, reader: Reader, args, energy: EnergyModel, task: str
         obs, info = env.reset(seed=seed, options=options)
         episode = run_job(env, obs, info, reader, args, energy)
         results.append({
-            "seed": seed, "success": bool(episode.get("success")), "steps": episode.get("step"), "metrics": episode.get("metrics"),
+            "seed": seed, "success": bool(episode.get("success")), "outcome": outcome(episode), "steps": episode.get("step"), "metrics": episode.get("metrics"),
             "collisions": episode.get("collisions"), "droneCollisions": episode.get("droneCollisions"),
         })
         print(
-            f"{name} seed {seed}: {'success' if episode.get('success') else 'failed'} in {episode.get('step')} steps, "
+            f"{name} seed {seed}: {outcome(episode)} in {episode.get('step')} steps, "
             f"{episode.get('droneCollisions')} drone collisions, metrics {episode.get('metrics')}", flush=True,
         )
     rate = sum(r["success"] for r in results) / len(results)
     bumps = sum(r["droneCollisions"] or 0 for r in results) / len(results)
-    out = REPORTS / "brain" / f"{task}-s{args.size}-{args.terrain}-{args.perception}{'-fleet' if fleet else ''}-{datetime.now():%Y%m%d-%H%M%S}.json"
-    write_report(out, task=task, terrain=args.terrain, skill=str(args.skill), fleet=fleet, success_rate=rate, drone_collisions=bumps, results=results)
-    print(f"{name}: success {rate:.0%}, {bumps:.1f} drone collisions an episode, report {out}", flush=True)
+    killed = prey_killed(results) if task in ("hunt_mobs", "guard_region") else None
+    tags = f"{'-fleet' if fleet else ''}{'-scripted' if args.scripted else ''}"
+    out = REPORTS / "brain" / f"{task}-s{args.size}-{args.terrain}-{args.perception}{tags}-{datetime.now():%Y%m%d-%H%M%S}.json"
+    write_report(out, task=task, terrain=args.terrain, flown_by=flown_by(args), fleet=fleet, success_rate=rate, prey_killed=killed, drone_collisions=bumps, results=results)
+    print(f"{name} flown by {flown_by(args)}: success {rate:.0%}{'' if killed is None else f', {killed:.0%} of prey killed'}, {bumps:.1f} drone collisions an episode, report {out}", flush=True)
 
 
 def evaluate_fleet(reader: Reader, args, energy: EnergyModel) -> None:
@@ -203,11 +242,15 @@ def main() -> None:
     parser.add_argument("--size", type=int, default=5, help="structure or deposit side for the copy, build, and mine arenas")
     parser.add_argument("--perception", choices=["vision", "scan"], default="vision", help="scan hands the drone each job box read from the world")
     parser.add_argument("--reader", type=Path, default=CHECKPOINTS / "reader.pt")
-    parser.add_argument("--skill", type=Path, default=None, help="a trained cell skill flies the goals, the scripted controller does without one")
+    parser.add_argument("--skill", type=Path, default=CHECKPOINTS / "skill.pt", help="the cell skill, flies every planner's goals but the goto planner's")
+    parser.add_argument("--goto", type=Path, default=CHECKPOINTS / "goto.pt", help="the goto policy, flies the goto planner's goals and the flights home")
+    parser.add_argument("--scripted", action="store_true", help="the scripted controller flies the goals in place of the learned policies, for development and comparison")
     parser.add_argument("--schematics", type=Path, default=SCHEMATICS, help="the game's schematics folder, for build jobs")
     args = parser.parse_args()
 
     reader = Reader(args.reader)
+    args.pilots = load_pilots(args)
+    print(f"goals flown by {flown_by(args)}", flush=True)
     # training arenas don't run the battery down, so only player jobs teach the model
     if args.fleet is not None:
         evaluate_fleet(reader, args, EnergyModel(path=None))
